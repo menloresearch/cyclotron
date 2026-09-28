@@ -8,10 +8,20 @@ train policies in simulation and deploy them to the real robot.
 Get your own Asimov 1.
 [Order now](https://menlo.ai/order).
 
+
+
 ## Isaac Asimov
 
 Standalone Isaac Lab extension for training Asimov-1 locomotion policies with
 PPO and adversarial motion priors (AMP).
+
+<div align="center">
+
+| <div align="center">Isaac Lab</div> | <div align="center">Real deployment</div> |
+| :---: | :---: |
+| [<img src="https://static.asimov.inc/asimov_1_walking_sim.gif" width="400px" alt="Asimov 1 walking in Isaac Lab">](https://static.asimov.inc/asimov_1_walking_sim.gif) | [<img src="https://static.asimov.inc/asimov_1_walking_real.gif" width="400px" alt="Asimov 1 walking in the physical world">](https://static.asimov.inc/asimov_1_walking_real.gif) |
+
+</div>
 
 ## Quick Install
 
