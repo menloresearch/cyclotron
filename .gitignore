@@ -33,3 +33,9 @@ wandb/
 !.vscode/.gitignore
 !.vscode/extensions.json
 !.vscode/tasks.json
+
+# Get-up policy: keep large simulation videos out of git, except the curated showcase media.
+docs/getup/**/*.mp4
+!docs/getup/media/*.mp4
+# Local training-server address (user@host).
+scripts/getup/server/.server

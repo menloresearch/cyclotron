@@ -94,6 +94,16 @@ alias), or `--onnx-output <path>` for an extra ONNX export.
 
 Checkpoints and logs are written to `logs/rsl_rl/<experiment_name>/<run>/`.
 
+## Get-up policy
+
+Asimov 1 can also get back up on its own after a fall — from its back,
+front, side, sitting, kneeling, or mid-fall — in about 3 seconds, then hand
+off to the walking policy above.
+
+![Get-up from all 8 starting positions](docs/getup/media/getup_all_positions.gif)
+
+See **[docs/getup/README.md](docs/getup/README.md)** for results, videos, and how to train/run it.
+
 ## Troubleshooting
 The training code has been tested on the following GPUs:
 - NVIDIA RTX A6000
