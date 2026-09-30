@@ -6,7 +6,7 @@ ISAAC_ASIMOV_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)
 PYTHON_EXE="${PYTHON_EXE:-python}"
 
 usage() {
-    echo "Usage: $0 {--install|--list|--train|--play} [arguments]"
+    echo "Usage: $0 {--install|--list|--train|--play|--share} [arguments]"
 }
 
 case "${1:-}" in
@@ -24,6 +24,10 @@ case "${1:-}" in
     -p|--play)
         shift
         "${PYTHON_EXE}" "${ISAAC_ASIMOV_ROOT}/scripts/rsl_rl/play.py" "$@"
+        ;;
+    -s|--share)
+        shift
+        "${PYTHON_EXE}" "${ISAAC_ASIMOV_ROOT}/scripts/share.py" "$@"
         ;;
     *)
         usage

@@ -98,6 +98,25 @@ alias), or `--onnx-output <path>` for an extra ONNX export.
 
 Checkpoints and logs are written to `logs/rsl_rl/<experiment_name>/<run>/`.
 
+## Share your policy
+
+Share a finished run on the Hugging Face Hub. Log in first with
+`huggingface-cli login`.
+
+```bash
+./isaac_asimov.sh --share logs/rsl_rl/<experiment_name>/<run> \
+    --repo-id <user_or_org>/<repo_name>
+```
+
+This uploads `agent.yaml`, `env.yaml`, `policy.onnx` and a generated
+`README.md` model card (BSD-3-Clause, `library_name: asimov`,
+`pipeline_tag: robotics`). If the run has no `exported/policy.onnx` yet, the
+latest checkpoint is exported automatically; use `--checkpoint <path>` to
+share a different one. Use `--title "<text>"` to set the card's title,
+`--summary "<text>"` to add a paragraph describing your training method,
+`--private` to create a private repo, and `--dry-run` to preview the card
+without uploading.
+
 ## Troubleshooting
 The training code has been tested on the following GPUs:
 - NVIDIA RTX A6000
