@@ -50,6 +50,13 @@ parser.add_argument(
     default="policy.onnx",
     help="ONNX filename used when --onnx-output is a directory.",
 )
+parser.add_argument(
+    "--export-only",
+    "--export_only",
+    dest="export_only",
+    action="store_true",
+    help="Exit after exporting the policy instead of running the simulation loop.",
+)
 cli_args.add_rsl_rl_args(parser)
 AppLauncher.add_app_launcher_args(parser)
 args_cli, hydra_args = parser.parse_known_args()
@@ -196,6 +203,10 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         else:
             export_policy_as_onnx(policy_nn, normalizer=normalizer, path=onnx_dir, filename=onnx_filename)
         print(f"[INFO] Exported ONNX policy to: {os.path.join(onnx_dir, onnx_filename)}")
+
+    if args_cli.export_only:
+        env.close()
+        return
 
     dt = env.unwrapped.step_dt
 
