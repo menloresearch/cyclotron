@@ -61,7 +61,10 @@ parser.add_argument(
     "--checkpoint",
     type=str,
     default=None,
-    help="Checkpoint to export and upload. Defaults to the latest model_*.pt in the run if policy.onnx is missing.",
+    help=(
+        "Checkpoint to export and upload: a full path to a .pt file, or a filename inside run_dir."
+        " Defaults to the latest model_*.pt in the run if policy.onnx is missing."
+    ),
 )
 parser.add_argument(
     "--task",
@@ -78,6 +81,14 @@ def latest_checkpoint(run_dir: str) -> str:
     if not checkpoints:
         sys.exit(f"[ERROR] No model_*.pt checkpoints found in: {run_dir}")
     return os.path.join(run_dir, max(checkpoints, key=lambda f: int(f[len("model_") : -len(".pt")])))
+
+
+def resolve_checkpoint(run_dir: str, checkpoint: str) -> str:
+    """Resolve --checkpoint the same way as train.py and play.py, with run_dir standing in for --load_run."""
+    path = os.path.expanduser(checkpoint) if os.sep in checkpoint else os.path.join(run_dir, checkpoint)
+    if not os.path.isfile(path):
+        sys.exit(f"[ERROR] Checkpoint not found: {path}")
+    return os.path.abspath(path)
 
 
 def infer_task(agent_yaml_path: str) -> str:
@@ -115,7 +126,10 @@ def main() -> None:
 
     needs_export = not onnx_path and (args_cli.checkpoint or not os.path.isfile(files["policy.onnx"]))
     if needs_export:
-        checkpoint = os.path.abspath(os.path.expanduser(args_cli.checkpoint or latest_checkpoint(run_dir)))
+        if args_cli.checkpoint:
+            checkpoint = resolve_checkpoint(run_dir, args_cli.checkpoint)
+        else:
+            checkpoint = latest_checkpoint(run_dir)
         task = args_cli.task or infer_task(files["agent.yaml"])
         # play.py exports next to the checkpoint, so upload from there.
         files["policy.onnx"] = os.path.join(os.path.dirname(checkpoint), "exported", "policy.onnx")

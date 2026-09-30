@@ -87,7 +87,6 @@ from isaaclab_rl.rsl_rl import RslRlBaseRunnerCfg, RslRlVecEnvWrapper, handle_de
 
 import isaaclab_tasks  # noqa: F401
 import isaac_asimov.tasks  # noqa: F401
-from isaaclab_tasks.utils import get_checkpoint_path
 from isaaclab_tasks.utils.hydra import hydra_task_config
 
 logger = logging.getLogger(__name__)
@@ -160,8 +159,10 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     if isinstance(env.unwrapped, DirectMARLEnv):
         env = multi_agent_to_single_agent(env)
 
+    # Passing --checkpoint implies --resume.
+    agent_cfg.resume = agent_cfg.resume or args_cli.checkpoint is not None
     if agent_cfg.resume or agent_cfg.algorithm.class_name == "Distillation":
-        resume_path = get_checkpoint_path(log_root_path, agent_cfg.load_run, agent_cfg.load_checkpoint)
+        resume_path = cli_args.resolve_checkpoint(log_root_path, agent_cfg, args_cli)
 
     if args_cli.video:
         video_kwargs = {

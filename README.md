@@ -12,9 +12,7 @@ train policies in simulation and deploy them to the real robot.
 Get your own Asimov 1.
 [Order now](https://menlo.ai/order).
 
-## Isaac Asimov
-
-Standalone Isaac Lab extension for training Asimov-1 locomotion policies with
+This repo is a standalone Isaac Lab extension for training Asimov-1 locomotion policies with
 PPO and adversarial motion priors (AMP).
 
 ## Quick Install
@@ -32,7 +30,7 @@ cd isaac_asimov
 ./quick_install.sh
 ```
 
-### Advanced Install
+#### Advanced Install
 
 If you already have your own Isaac Lab checkout you want
 to reuse, want conda instead of uv, or just want to understand what each
@@ -51,7 +49,7 @@ This is a small job to see if the full training code is working. These settings 
     --task Asimov1-Velocity-AMP-v0 --num_envs 128 --headless --max_iterations 100
 ```
 
-### Single GPU Training Run
+#### Single GPU Training Run
 
 Use this code to replicate the training run for our baseline policy using a single GPU.
 
@@ -78,7 +76,7 @@ interrupted. Resuming starts a new run directory initialised from that checkpoin
 
 Note: We use 4096 `num_envs` to train our baseline locomotion policy using A6000 or pro 6000. If you hit any out of memory errors, consider lowering the `num_envs`. However, this means that the policy may take longer to converge or may be less stable for the same number of iterations.
 
-### Multi-GPU Training Run
+#### Multi-GPU Training Run
 
 This code runs training via `--distributed` with two GPUs and 4096 environments per GPU. You should adjust the parameters according to the compute available to you.
 
@@ -97,8 +95,11 @@ Load the latest checkpoint and visualize the trained policy:
     --task Asimov1-Velocity-AMP-Play-v0 --num_envs 32
 ```
 
-Use `--checkpoint <path>` to select a specific checkpoint (`--target` is an
-alias), or `--onnx-output <path>` for an extra ONNX export.
+Use `--checkpoint` to select a specific checkpoint (`--target` is an alias),
+or `--onnx-output <path>` for an extra ONNX export. `--checkpoint` works the
+same way for `--train`, `--play` and `--share`: pass a full path to a `.pt`
+file, or a filename such as `model_500.pt` together with `--load_run <run>`.
+Without it, the latest checkpoint is used.
 
 Checkpoints and logs are written to `logs/rsl_rl/<experiment_name>/<run>/`.
 
@@ -115,8 +116,8 @@ Share a finished run on the Hugging Face Hub. Log in first with
 This uploads `agent.yaml`, `env.yaml`, `policy.onnx` and a generated
 `README.md` model card (BSD-3-Clause, `library_name: asimov`,
 `pipeline_tag: robotics`). If the run has no `exported/policy.onnx` yet, the
-latest checkpoint is exported automatically; use `--checkpoint <path>` to
-share a different one. Use `--title "<text>"` to set the card's title,
+latest checkpoint is exported automatically; use `--checkpoint` to share a
+different one (a full path, or a filename inside the run directory). Use `--title "<text>"` to set the card's title,
 `--summary "<text>"` to add a paragraph describing your training method,
 `--private` to create a private repo, and `--dry-run` to preview the card
 without uploading.
