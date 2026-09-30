@@ -1,5 +1,9 @@
 # Asimov 1 Locomotion
 
+<p align="center">
+  <img src="docs/assets/asimov-sim2real.webp" alt="Asimov 1 walking in simulation (left) and on the real robot (right)" width="640">
+</p>
+
 Asimov 1 is an open-source humanoid robot developed by
 [Menlo Research](https://menlo.ai/). This repository provides the
 training and evaluation code for its locomotion policies, so you can
