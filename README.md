@@ -72,6 +72,10 @@ Use this code to replicate the training run for our baseline policy using a sing
 Useful flags: `--max_iterations <n>`, `--seed <n>`, `--video` (record rollout
 clips during training).
 
+Training prints the run directory and a command to resume the run from its
+latest checkpoint, at the start and again when training ends or is
+interrupted. Resuming starts a new run directory initialised from that checkpoint.
+
 Note: We use 4096 `num_envs` to train our baseline locomotion policy using A6000 or pro 6000. If you hit any out of memory errors, consider lowering the `num_envs`. However, this means that the policy may take longer to converge or may be less stable for the same number of iterations.
 
 ### Multi-GPU Training Run

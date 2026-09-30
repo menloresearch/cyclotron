@@ -98,6 +98,19 @@ torch.backends.cudnn.deterministic = False
 torch.backends.cudnn.benchmark = False
 
 
+def print_run_info(log_dir: str) -> None:
+    """Print where the run is stored and how to resume it."""
+    if args_cli.distributed and app_launcher.local_rank != 0:
+        return
+    resume_cmd = f"./isaac_asimov.sh --train --task {args_cli.task} --resume --load_run {os.path.basename(log_dir)}"
+    if args_cli.num_envs is not None:
+        resume_cmd += f" --num_envs {args_cli.num_envs}"
+    if args_cli.headless:
+        resume_cmd += " --headless"
+    print(f"[INFO] Run directory: {log_dir}", flush=True)
+    print(f"[INFO] To resume this run from its latest checkpoint: {resume_cmd}", flush=True)
+
+
 @hydra_task_config(args_cli.task, args_cli.agent)
 def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agent_cfg: RslRlBaseRunnerCfg):
     agent_cfg = cli_args.update_rsl_rl_cfg(agent_cfg, args_cli)
@@ -179,7 +192,11 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     dump_yaml(os.path.join(log_dir, "params", "env.yaml"), env_cfg)
     dump_yaml(os.path.join(log_dir, "params", "agent.yaml"), agent_cfg)
 
-    runner.learn(num_learning_iterations=agent_cfg.max_iterations, init_at_random_ep_len=True)
+    print_run_info(log_dir)
+    try:
+        runner.learn(num_learning_iterations=agent_cfg.max_iterations, init_at_random_ep_len=True)
+    finally:
+        print_run_info(log_dir)
 
     print(f"Training time: {round(time.time() - start_time, 2)} seconds")
 
