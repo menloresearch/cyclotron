@@ -139,7 +139,22 @@ This checks that the model card has `library_name: asimov`, downloads
 seed) to the matching Play task, and runs `policy.onnx` in real time: the same
 file that goes on the robot. Private or gated repos need
 `huggingface-cli login` first. Isaac Lab's app flags work as usual, e.g.
-`--device cuda:1`, or `--livestream 2` to view from another machine.
+`--device cuda:1`.
+
+On a remote machine with no display, stream the viewer and connect to the
+remote's IP with NVIDIA's Isaac Sim WebRTC Streaming Client:
+
+```bash
+# Same local network or VPN
+./isaac_asimov.sh --view <org>/<model> --livestream 2
+
+# Over the internet
+PUBLIC_IP=<remote public ip> ./isaac_asimov.sh --view <org>/<model> --livestream 1
+```
+
+The client needs TCP port 49100 and UDP port 47998 on the remote to be
+reachable, so an SSH tunnel is not enough; a VPN between the two machines
+works.
 
 ## Troubleshooting
 The training code has been tested on the following GPUs:

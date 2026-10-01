@@ -5,6 +5,7 @@ task with the policy settings from its ``env.yaml``, and runs the ONNX policy wi
 """
 
 import argparse
+import os
 import sys
 
 from isaaclab.app import AppLauncher
@@ -18,6 +19,17 @@ parser = argparse.ArgumentParser(
 parser.add_argument("repo_id", type=str, help="Hugging Face model id, e.g. <org>/<model>.")
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
+
+# Without a display, Isaac Sim fails slowly and unclearly when it tries to open its window. The flags can also be set
+# through AppLauncher's HEADLESS and LIVESTREAM environment variables.
+has_display = bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
+headless = args_cli.headless or os.environ.get("HEADLESS", "0") == "1"
+livestream = int(args_cli.livestream or 0) > 0 or os.environ.get("LIVESTREAM", "0") in ("1", "2")
+if not (has_display or headless or livestream):
+    sys.exit(
+        "[ERROR] No display found. To watch from another machine, run with --livestream 2 (same network or VPN)"
+        ' or PUBLIC_IP=<ip> ... --livestream 1 (internet). See the README section "View a shared policy".'
+    )
 
 # Resolve the model before starting Isaac Sim, so mistakes fail fast.
 try:
