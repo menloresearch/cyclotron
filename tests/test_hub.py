@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from isaac_asimov.hub import strip_local_paths
+from cyclotron.hub import strip_local_paths
 
 # Trimmed copy of a real shared env.yaml: Isaac Lab tags, training-machine paths and internal module names.
 ENV_YAML = """\

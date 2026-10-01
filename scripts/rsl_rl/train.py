@@ -86,7 +86,7 @@ from isaaclab.utils.io import dump_yaml
 from isaaclab_rl.rsl_rl import RslRlBaseRunnerCfg, RslRlVecEnvWrapper, handle_deprecated_rsl_rl_cfg
 
 import isaaclab_tasks  # noqa: F401
-import isaac_asimov.tasks  # noqa: F401
+import cyclotron.tasks  # noqa: F401
 from isaaclab_tasks.utils.hydra import hydra_task_config
 
 logger = logging.getLogger(__name__)
@@ -101,7 +101,7 @@ def print_run_info(log_dir: str) -> None:
     """Print where the run is stored and how to resume it."""
     if args_cli.distributed and app_launcher.local_rank != 0:
         return
-    resume_cmd = f"./isaac_asimov.sh --train --task {args_cli.task} --resume --load_run {os.path.basename(log_dir)}"
+    resume_cmd = f"./cyclotron.sh --train --task {args_cli.task} --resume --load_run {os.path.basename(log_dir)}"
     if args_cli.num_envs is not None:
         resume_cmd += f" --num_envs {args_cli.num_envs}"
     if args_cli.headless:

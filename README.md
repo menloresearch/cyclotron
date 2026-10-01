@@ -1,4 +1,4 @@
-# Asimov 1 Locomotion
+# Cyclotron
 
 <p align="center">
   <img src="docs/assets/asimov-sim2real.webp" alt="Asimov 1 walking in simulation (left) and on the real robot (right)" width="640">
@@ -25,8 +25,8 @@ NVIDIA driver, [uv](https://docs.astral.sh/uv/) installed, and `sudo` access
 (used to install `cmake`/`build-essential`).
 
 ```bash
-git clone https://github.com/menloresearch/isaac_asimov.git
-cd isaac_asimov
+git clone https://github.com/menloresearch/cyclotron.git
+cd cyclotron
 ./quick_install.sh
 ```
 
@@ -45,7 +45,7 @@ Before starting a training run, run a quick test to ensure the full pipeline is 
 This is a small job to see if the full training code is working. These settings should work for most GPUs and finish relatively quickly.
 
 ```bash
-./isaac_asimov.sh --train \
+./cyclotron.sh --train \
     --task Asimov1-Velocity-AMP-v0 --num_envs 128 --headless --max_iterations 100
 ```
 
@@ -56,14 +56,14 @@ Use this code to replicate the training run for our baseline policy using a sing
 **AMP (recommended)**
 
 ```bash
-./isaac_asimov.sh --train \
+./cyclotron.sh --train \
     --task Asimov1-Velocity-AMP-v0 --num_envs 4096 --headless
 ```
 
 **Plain PPO baseline**
 
 ```bash
-./isaac_asimov.sh --train \
+./cyclotron.sh --train \
     --task Asimov1-Velocity-v0 --num_envs 4096 --headless
 ```
 
@@ -91,7 +91,7 @@ python -m torch.distributed.run --standalone --nnodes=1 --nproc_per_node=2 \
 Load the latest checkpoint and visualize the trained policy:
 
 ```bash
-./isaac_asimov.sh --play \
+./cyclotron.sh --play \
     --task Asimov1-Velocity-AMP-Play-v0 --num_envs 32
 ```
 
@@ -109,7 +109,7 @@ Share a finished run on the Hugging Face Hub. Log in first with
 `huggingface-cli login`.
 
 ```bash
-./isaac_asimov.sh --share logs/rsl_rl/<experiment_name>/<run> \
+./cyclotron.sh --share logs/rsl_rl/<experiment_name>/<run> \
     --repo-id <user_or_org>/<repo_name>
 ```
 
@@ -132,7 +132,7 @@ config. It runs them in your browser with
 [Node.js](https://nodejs.org) 20 or newer: no Isaac Sim and no GPU.
 
 ```bash
-./isaac_asimov.sh --view <org>/<model>
+./cyclotron.sh --view <org>/<model>
 ```
 
 On the first run this fetches the `third_party/humanoid-policy-viewer`

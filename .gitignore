@@ -24,7 +24,7 @@ wandb/
 
 # Motion data is ignored by default except for the one training clip in this repository.
 *.npz
-!source/isaac_asimov/isaac_asimov/tasks/locomotion/motions/policy_delay_walk_slow.npz
+!source/cyclotron/cyclotron/tasks/locomotion/motions/policy_delay_walk_slow.npz
 
 # IDE and operating system files
 .DS_Store

@@ -23,7 +23,7 @@ uv pip install torch==2.7.0 torchvision==0.22.0 --index-url https://download.pyt
 
 (cd third_party/IsaacLab && ./isaaclab.sh --install rsl_rl)
 
-uv pip install -e "${ROOT}/source/isaac_asimov"
+uv pip install -e "${ROOT}/source/cyclotron"
 
 echo
 echo "Install complete. Activate the environment with:"
