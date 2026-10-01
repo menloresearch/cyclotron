@@ -9,7 +9,15 @@ import types
 
 import pytest
 
-from isaac_asimov.hub import HubError, apply_env_yaml, download_asimov_model, infer_play_task, load_yaml, overlay_cfg
+from isaac_asimov.hub import (
+    HubError,
+    apply_env_yaml,
+    download_asimov_model,
+    infer_play_task,
+    load_yaml,
+    overlay_cfg,
+    strip_local_paths,
+)
 
 # Trimmed copy of a real shared env.yaml: Isaac Lab tags, training-machine paths and internal module names.
 ENV_YAML = """\
@@ -178,11 +186,11 @@ class EnvCfg:
     actions: ActionsCfg = dataclasses.field(default_factory=ActionsCfg)
 
 
-def env_yaml_data() -> dict:
+def env_yaml_data(text: str = ENV_YAML) -> dict:
     with tempfile.TemporaryDirectory() as tmp:
         path = os.path.join(tmp, "env.yaml")
         with open(path, "w") as f:
-            f.write(ENV_YAML)
+            f.write(text)
         return load_yaml(path)
 
 
@@ -225,6 +233,58 @@ def test_apply_env_yaml_copies_policy_settings_only():
 
     assert "scene.robot.actuators.hip_pitch.stiffness" in changed
     assert sorted(missing) == ["observations.policy.extra_term", "scene.robot.actuators.neck"]
+
+
+def test_strip_local_paths_keeps_file_names_and_prim_paths():
+    text = """\
+viewer:
+  cam_prim_path: /OmniverseKit_Persp
+scene:
+  robot:
+    prim_path: /World/envs/env_.*/Robot
+    spawn:
+      asset_path: /home/menlo/IsaacLab/source/isaaclab_assets/data/Robots/Asimov1/asimov_1.urdf
+      usd_dir: null
+      visual_material_path: material
+  contact_forces:
+    filter_prim_paths_expr:
+    - /World/envs/env_.*/Robot/torso_link
+  terrain:
+    terrain_generator:
+      cache_dir: '/tmp/isaaclab/terrains'
+    usd_path: https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/arrow_x.usd
+recorders:
+  dataset_export_dir_path: C:\\runs\\logs
+amp_data:
+  motion_files:
+  - /home/menlo/motions/walk_slow.npz
+  - ~/motions/run.npz
+  joint_names:
+  - left_hip_pitch_joint
+"""
+    stripped, removed = strip_local_paths(text)
+    assert removed == [
+        "/home/menlo/IsaacLab/source/isaaclab_assets/data/Robots/Asimov1/asimov_1.urdf",
+        "/tmp/isaaclab/terrains",
+        "C:\\runs\\logs",
+        "/home/menlo/motions/walk_slow.npz",
+        "~/motions/run.npz",
+    ]
+    assert stripped == (
+        text.replace("/home/menlo/IsaacLab/source/isaaclab_assets/data/Robots/Asimov1/", "")
+        .replace("/tmp/isaaclab/", "")
+        .replace("C:\\runs\\", "")
+        .replace("/home/menlo/motions/", "")
+        .replace("~/motions/", "")
+    )
+
+
+def test_strip_local_paths_keeps_policy_settings():
+    stripped, removed = strip_local_paths(ENV_YAML)
+    assert removed == ["/home/menlo/IsaacLab/source/isaaclab_assets/data/Robots/Asimov1/asimov_1.urdf"]
+    original_cfg, shared_cfg = EnvCfg(), EnvCfg()
+    assert apply_env_yaml(shared_cfg, env_yaml_data(stripped)) == apply_env_yaml(original_cfg, env_yaml_data())
+    assert shared_cfg == original_cfg
 
 
 def test_overlay_cfg_can_turn_a_term_off_but_not_rebuild_one():
