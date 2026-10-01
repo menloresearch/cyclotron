@@ -122,6 +122,25 @@ different one (a full path, or a filename inside the run directory). Use `--titl
 `--private` to create a private repo, and `--dry-run` to preview the card
 without uploading.
 
+## View a shared policy
+
+To watch your own training runs, use `--play`. `--view` is for policies someone
+shared on the Hugging Face Hub, which contain only the ONNX policy and its
+config.
+
+```bash
+./isaac_asimov.sh --view <org>/<model>
+```
+
+This checks that the model card has `library_name: asimov`, downloads
+`policy.onnx` and the yaml files to `logs/hf/`, and works out the task from
+`agent.yaml`. It then applies the policy settings recorded in `env.yaml`
+(timing, default pose, actuator gains and limits, actions, observations and
+seed) to the matching Play task, and runs `policy.onnx` in real time: the same
+file that goes on the robot. Private or gated repos need
+`huggingface-cli login` first. Isaac Lab's app flags work as usual, e.g.
+`--device cuda:1`, or `--livestream 2` to view from another machine.
+
 ## Troubleshooting
 The training code has been tested on the following GPUs:
 - NVIDIA RTX A6000

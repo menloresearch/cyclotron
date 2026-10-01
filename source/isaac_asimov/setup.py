@@ -21,7 +21,7 @@ setup(
     packages=find_packages(),
     package_data={"isaac_asimov": ["tasks/locomotion/motions/*.npz"]},
     include_package_data=True,
-    install_requires=["numpy<2", "rsl-rl-lib==5.0.1", "huggingface_hub"],
+    install_requires=["numpy<2", "rsl-rl-lib==5.0.1", "huggingface_hub", "onnxruntime"],
     python_requires=">=3.10",
     classifiers=[
         "Natural Language :: English",
