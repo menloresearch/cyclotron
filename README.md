@@ -106,7 +106,7 @@ Checkpoints and logs are written to `logs/rsl_rl/<experiment_name>/<run>/`.
 ## Share your policy
 
 Share a finished run on the Hugging Face Hub. Log in first with
-`huggingface-cli login`.
+`hf auth login`.
 
 ```bash
 ./cyclotron.sh --share logs/rsl_rl/<experiment_name>/<run> \
