@@ -5,12 +5,12 @@ target-version = ["py310"]
 [tool.isort]
 profile = "black"
 line_length = 120
-known_first_party = ["isaac_asimov"]
+known_first_party = ["cyclotron"]
 known_isaaclabparty = ["isaaclab", "isaaclab_rl", "isaaclab_tasks"]
 sections = ["FUTURE", "STDLIB", "THIRDPARTY", "ISAACLABPARTY", "FIRSTPARTY", "LOCALFOLDER"]
 
 [tool.pytest.ini_options]
-pythonpath = ["source/isaac_asimov"]
+pythonpath = ["source/cyclotron"]
 testpaths = ["tests"]
 
 [tool.pyright]

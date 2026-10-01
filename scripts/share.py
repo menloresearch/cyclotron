@@ -2,7 +2,7 @@
 
 Uploads ``params/agent.yaml``, ``params/env.yaml`` and ``exported/policy.onnx`` from a run directory,
 together with a generated model card. If the run has no ONNX export yet, the latest checkpoint is exported
-first via ``play.py --export-only``. Requires a prior ``huggingface-cli login`` (or ``HF_TOKEN``).
+first via ``play.py --export-only``. Requires a prior ``hf auth login`` (or ``HF_TOKEN``).
 
 File paths from the training machine are reduced to file names in the uploaded yaml files; the run directory
 itself is not changed.
@@ -14,7 +14,7 @@ import re
 import subprocess
 import sys
 
-from isaac_asimov.hub import strip_local_paths
+from cyclotron.hub import strip_local_paths
 
 README_TEMPLATE = """---
 library_name: asimov
@@ -29,7 +29,7 @@ license: bsd-3-clause
 - `policy.onnx` is the exported policy for inference, producing joint-position actions.
 - `agent.yaml` records the actor-critic and AMP training settings, including the motion data configuration.
 - `env.yaml` records the simulation and locomotion task settings, including observations, actions, commands, and rewards.
-- Training and evaluation code: [menloresearch/isaac_asimov](https://github.com/menloresearch/isaac_asimov).
+- Training and evaluation code: [menloresearch/cyclotron](https://github.com/menloresearch/cyclotron).
 """
 
 DEFAULT_TITLE = "Asimov 1 locomotion policy checkpoint"
@@ -46,7 +46,7 @@ EXPERIMENT_TASKS = {
 
 PLAY_SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "rsl_rl", "play.py")
 
-parser = argparse.ArgumentParser(description="Upload a trained Isaac Asimov run to the Hugging Face Hub.")
+parser = argparse.ArgumentParser(description="Upload a trained Cyclotron run to the Hugging Face Hub.")
 parser.add_argument("run_dir", type=str, help="Run directory, e.g. logs/rsl_rl/<experiment_name>/<run>.")
 parser.add_argument("--repo-id", "--repo_id", dest="repo_id", required=True, help="Target repo, e.g. user/name.")
 parser.add_argument("--title", type=str, default=DEFAULT_TITLE, help="Title of the model card.")
@@ -160,13 +160,13 @@ def main() -> None:
     try:
         from huggingface_hub import CommitOperationAdd, HfApi
     except ImportError:
-        sys.exit("[ERROR] huggingface_hub is not installed. Install it with: ./isaac_asimov.sh --install")
+        sys.exit("[ERROR] huggingface_hub is not installed. Install it with: ./cyclotron.sh --install")
 
     api = HfApi()
     try:
         user = api.whoami()["name"]
     except Exception:
-        sys.exit("[ERROR] Not logged in to Hugging Face. Run: huggingface-cli login")
+        sys.exit("[ERROR] Not logged in to Hugging Face. Run: hf auth login")
     print(f"[INFO] Logged in as: {user}")
 
     if needs_export:

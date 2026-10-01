@@ -1,4 +1,4 @@
-"""Prepare a training run for sharing on the Hugging Face Hub with ``./isaac_asimov.sh --share``.
+"""Prepare a training run for sharing on the Hugging Face Hub with ``./cyclotron.sh --share``.
 
 Plain Python with no Isaac Lab imports, so it can run without Isaac Sim and in tests.
 """
