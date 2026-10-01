@@ -4,9 +4,9 @@ import numpy as np
 import torch
 from tensordict import TensorDict
 
-from isaac_asimov.algorithms.amp_ppo import AMPPPO
-from isaac_asimov.algorithms.discriminator import AMPDiscriminator, AMPFeatureNormalizer
-from isaac_asimov.algorithms.replay_buffer import AMPReplayBuffer
+from cyclotron.algorithms.amp_ppo import AMPPPO
+from cyclotron.algorithms.discriminator import AMPDiscriminator, AMPFeatureNormalizer
+from cyclotron.algorithms.replay_buffer import AMPReplayBuffer
 from rsl_rl.models import MLPModel
 from rsl_rl.storage import RolloutStorage
 
