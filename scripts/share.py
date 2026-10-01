@@ -2,7 +2,7 @@
 
 Uploads ``params/agent.yaml``, ``params/env.yaml`` and ``exported/policy.onnx`` from a run directory,
 together with a generated model card. If the run has no ONNX export yet, the latest checkpoint is exported
-first via ``play.py --export-only``. Requires a prior ``huggingface-cli login`` (or ``HF_TOKEN``).
+first via ``play.py --export-only``. Requires a prior ``hf auth login`` (or ``HF_TOKEN``).
 
 File paths from the training machine are reduced to file names in the uploaded yaml files; the run directory
 itself is not changed.
@@ -166,7 +166,7 @@ def main() -> None:
     try:
         user = api.whoami()["name"]
     except Exception:
-        sys.exit("[ERROR] Not logged in to Hugging Face. Run: huggingface-cli login")
+        sys.exit("[ERROR] Not logged in to Hugging Face. Run: hf auth login")
     print(f"[INFO] Logged in as: {user}")
 
     if needs_export:
