@@ -50,6 +50,13 @@ parser.add_argument(
     default="policy.onnx",
     help="ONNX filename used when --onnx-output is a directory.",
 )
+parser.add_argument(
+    "--export-only",
+    "--export_only",
+    dest="export_only",
+    action="store_true",
+    help="Exit after exporting the policy instead of running the simulation loop.",
+)
 cli_args.add_rsl_rl_args(parser)
 AppLauncher.add_app_launcher_args(parser)
 args_cli, hydra_args = parser.parse_known_args()
@@ -85,7 +92,6 @@ from isaaclab.envs import (
     ManagerBasedRLEnvCfg,
     multi_agent_to_single_agent,
 )
-from isaaclab.utils.assets import retrieve_file_path
 from isaaclab.utils.dict import print_dict
 
 from isaaclab_rl.rsl_rl import (
@@ -100,7 +106,6 @@ from isaaclab_rl.utils.pretrained_checkpoint import get_published_pretrained_che
 
 import isaaclab_tasks  # noqa: F401
 import isaac_asimov.tasks  # noqa: F401
-from isaaclab_tasks.utils import get_checkpoint_path
 from isaaclab_tasks.utils.hydra import hydra_task_config
 
 
@@ -125,10 +130,8 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         if not resume_path:
             print("[INFO] Unfortunately a pre-trained checkpoint is currently unavailable for this task.")
             return
-    elif args_cli.checkpoint:
-        resume_path = retrieve_file_path(args_cli.checkpoint)
     else:
-        resume_path = get_checkpoint_path(log_root_path, agent_cfg.load_run, agent_cfg.load_checkpoint)
+        resume_path = cli_args.resolve_checkpoint(log_root_path, agent_cfg, args_cli)
 
     log_dir = os.path.dirname(resume_path)
 
@@ -196,6 +199,10 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         else:
             export_policy_as_onnx(policy_nn, normalizer=normalizer, path=onnx_dir, filename=onnx_filename)
         print(f"[INFO] Exported ONNX policy to: {os.path.join(onnx_dir, onnx_filename)}")
+
+    if args_cli.export_only:
+        env.close()
+        return
 
     dt = env.unwrapped.step_dt
 
