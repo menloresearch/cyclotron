@@ -29,6 +29,7 @@ wandb/
 # IDE and operating system files
 .DS_Store
 .idea/
+.claude/
 .vscode/*
 !.vscode/.gitignore
 !.vscode/extensions.json
