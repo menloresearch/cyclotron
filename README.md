@@ -94,6 +94,54 @@ alias), or `--onnx-output <path>` for an extra ONNX export.
 
 Checkpoints and logs are written to `logs/rsl_rl/<experiment_name>/<run>/`.
 
+## Share and View on Hugging Face
+
+Share a trained policy on the [Hugging Face Hub](https://huggingface.co/models?other=asimov),
+where anyone can run it in the browser-based
+[humanoid-policy-viewer](https://github.com/menloresearch/humanoid-policy-viewer),
+with no GPU needed. A policy repo needs three files from your run, plus a model card:
+
+| File | Where it comes from |
+|---|---|
+| `policy.onnx` | `<run>/exported/policy.onnx`, written by `--play` |
+| `env.yaml` | `<run>/params/env.yaml`, written at the start of training. Required: the viewer reads the gains, action scale and torque limits from it. |
+| `agent.yaml` | `<run>/params/agent.yaml`, a record of the training settings |
+| `README.md` | The model card. Its metadata must include `library_name: asimov`. |
+
+```bash
+RUN=logs/rsl_rl/asimov_velocity_amp/<run>
+mkdir -p hub_upload
+cp "$RUN/exported/policy.onnx" "$RUN/params/env.yaml" "$RUN/params/agent.yaml" hub_upload/
+cat > hub_upload/README.md <<'EOF'
+---
+library_name: asimov
+pipeline_tag: robotics
+license: bsd-3-clause
+---
+
+# Asimov 1 locomotion policy
+
+Trained with [isaac_asimov](https://github.com/menloresearch/isaac_asimov).
+EOF
+
+pip install -U huggingface_hub   # provides the hf command
+hf auth login
+hf upload <your-username>/<repo-name> hub_upload .
+```
+
+Then try it in the viewer:
+
+```bash
+git clone https://github.com/menloresearch/humanoid-policy-viewer
+cd humanoid-policy-viewer
+npm run hf <your-username>/<repo-name>
+```
+
+The viewer runs policies with the default observations and 23 joint
+actions configured in this repo. See its
+[supported policies](https://github.com/menloresearch/humanoid-policy-viewer/blob/main/docs/huggingface.md#supported-policies)
+doc before changing the observation or action terms.
+
 ## Troubleshooting
 The training code has been tested on the following GPUs:
 - NVIDIA RTX A6000

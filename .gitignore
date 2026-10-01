@@ -17,6 +17,7 @@ _build/
 # Training outputs and checkpoints
 logs/
 outputs/
+hub_upload/
 videos/
 wandb/
 *.pt
