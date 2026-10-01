@@ -3,6 +3,9 @@
 Uploads ``params/agent.yaml``, ``params/env.yaml`` and ``exported/policy.onnx`` from a run directory,
 together with a generated model card. If the run has no ONNX export yet, the latest checkpoint is exported
 first via ``play.py --export-only``. Requires a prior ``huggingface-cli login`` (or ``HF_TOKEN``).
+
+File paths from the training machine are reduced to file names in the uploaded yaml files; the run directory
+itself is not changed.
 """
 
 import argparse
@@ -10,6 +13,8 @@ import os
 import re
 import subprocess
 import sys
+
+from isaac_asimov.hub import strip_local_paths
 
 README_TEMPLATE = """---
 library_name: asimov
@@ -136,6 +141,14 @@ def main() -> None:
 
     readme = README_TEMPLATE.format(title=args_cli.title, summary=args_cli.summary)
 
+    # Upload copies of the yaml files without the training machine's file paths; the run directory is left as is.
+    yamls = {}
+    for name in ("agent.yaml", "env.yaml"):
+        with open(files[name]) as f:
+            yamls[name], removed = strip_local_paths(f.read())
+        for path in removed:
+            print(f"[INFO] Removing local path from {name}: {path}")
+
     if args_cli.dry_run:
         if needs_export:
             print(f"[INFO] Would export {checkpoint} to ONNX using task {task}")
@@ -160,7 +173,10 @@ def main() -> None:
         export_onnx(checkpoint, task)
 
     repo_url = api.create_repo(args_cli.repo_id, repo_type="model", private=args_cli.private, exist_ok=True)
-    operations = [CommitOperationAdd(path_in_repo=name, path_or_fileobj=path) for name, path in files.items()]
+    operations = [
+        CommitOperationAdd(path_in_repo=name, path_or_fileobj=yamls[name].encode() if name in yamls else path)
+        for name, path in files.items()
+    ]
     operations.append(CommitOperationAdd(path_in_repo="README.md", path_or_fileobj=readme.encode()))
     api.create_commit(
         repo_id=args_cli.repo_id,
