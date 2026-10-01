@@ -147,3 +147,11 @@ extension in editable mode:
 ```bash
 ./isaac_asimov.sh --install
 ```
+
+### Policy viewer (optional)
+
+`./isaac_asimov.sh --view` runs in the browser through the
+`third_party/humanoid-policy-viewer` submodule and needs only Node.js 20 or
+newer, not this Python environment. It fetches the submodule, its npm
+dependencies and its own copy of the robot model on first use, so nothing
+needs to be installed ahead of time.

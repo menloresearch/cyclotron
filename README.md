@@ -126,35 +126,36 @@ without uploading.
 
 To watch your own training runs, use `--play`. `--view` is for policies someone
 shared on the Hugging Face Hub, which contain only the ONNX policy and its
-config.
+config. It runs them in your browser with
+[humanoid-policy-viewer](https://github.com/menloresearch/humanoid-policy-viewer)
+(MuJoCo + onnxruntime in WebAssembly), so it needs only
+[Node.js](https://nodejs.org) 20 or newer: no Isaac Sim and no GPU.
 
 ```bash
 ./isaac_asimov.sh --view <org>/<model>
 ```
 
-This checks that the model card has `library_name: asimov`, downloads
-`policy.onnx` and the yaml files to `logs/hf/`, and works out the task from
-`agent.yaml`. It then applies the policy settings recorded in `env.yaml`
-(timing, default pose, actuator gains and limits, actions, observations and
-seed) to the matching Play task, and runs `policy.onnx` in real time: the same
-file that goes on the robot. Private or gated repos need
-`huggingface-cli login` first. Isaac Lab's app flags work as usual, e.g.
-`--device cuda:1`.
+On the first run this fetches the `third_party/humanoid-policy-viewer`
+submodule, its npm dependencies and the Asimov 1 robot model. It then
+downloads `policy.onnx`, `env.yaml` and `agent.yaml` to
+`~/.cache/humanoid-policy-viewer/hf/`, checks them, and opens the viewer with
+the policy selected. The gains, action scale, default pose and torque limits
+come from `env.yaml`. Use the sliders to command a velocity and push the robot.
 
-On a remote machine with no display, stream the viewer and connect to the
-remote's IP with NVIDIA's Isaac Sim WebRTC Streaming Client:
+Options: `--revision <ref>` (branch, tag or commit), `--port <n>` (default
+3000) and `--no-open`. Private or gated repos need `HF_TOKEN` set.
+
+The viewer simulates with MuJoCo, not PhysX, so it doubles as a quick
+sim2sim check. It expects the policy interface of this repo's velocity tasks
+(78 observations at 50 Hz, 23 actions).
+
+On a remote machine with no display, `--view` prints the URL instead of
+opening a browser. The server listens on localhost only, so forward its port
+over SSH and open `http://localhost:3000` on your own machine:
 
 ```bash
-# Same local network or VPN
-./isaac_asimov.sh --view <org>/<model> --livestream 2
-
-# Over the internet
-PUBLIC_IP=<remote public ip> ./isaac_asimov.sh --view <org>/<model> --livestream 1
+ssh -L 3000:localhost:3000 <remote>
 ```
-
-The client needs TCP port 49100 and UDP port 47998 on the remote to be
-reachable, so an SSH tunnel is not enough; a VPN between the two machines
-works.
 
 ## Troubleshooting
 The training code has been tested on the following GPUs:
@@ -172,6 +173,7 @@ This repository is built upon the support and contributions of the following ope
 - [whole_body_tracking](https://github.com/HybridRobotics/whole_body_tracking): Versatile humanoid control framework for motion tracking.
 - [beyondAMP](https://github.com/Renforce-Dynamics/beyondAMP): Referenced for AMP-based motion imitation.
 - [mjlab](https://github.com/mujocolab/mjlab): MuJoCo-based training utilities and references.
+- [humanoid-policy-viewer](https://github.com/Axellwppr/humanoid-policy-viewer): Browser-based MuJoCo policy viewer used by `--view`.
 
 ## Community
 
