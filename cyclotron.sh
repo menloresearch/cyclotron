@@ -6,7 +6,7 @@ CYCLOTRON_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
 PYTHON_EXE="${PYTHON_EXE:-python}"
 
 usage() {
-    echo "Usage: $0 {--install|--list|--train|--play|--share|--view} [arguments]"
+    echo "Usage: $0 {--install|--list|--train|--play|--export|--share|--view} [arguments]"
 }
 
 case "${1:-}" in
@@ -24,6 +24,10 @@ case "${1:-}" in
     -p|--play)
         shift
         "${PYTHON_EXE}" "${CYCLOTRON_ROOT}/scripts/rsl_rl/play.py" "$@"
+        ;;
+    -e|--export)
+        shift
+        "${PYTHON_EXE}" "${CYCLOTRON_ROOT}/scripts/rsl_rl/export.py" "$@"
         ;;
     -s|--share)
         shift
@@ -46,6 +50,19 @@ case "${1:-}" in
         if [ -n "${SSH_CONNECTION:-}" ] || { [ "$(uname)" != "Darwin" ] && [ -z "${DISPLAY:-}" ] && [ -z "${WAYLAND_DISPLAY:-}" ]; }; then
             set -- "$@" --no-open
         fi
+        # Make local paths absolute before the cd below; a run folder means the policy --export wrote into it.
+        VIEW_ARGS=()
+        for arg in "$@"; do
+            if [ -e "${arg}" ]; then
+                if [ -d "${arg}/exported" ] && ! ls "${arg}"/*.onnx >/dev/null 2>&1; then
+                    arg="${arg%/}/exported"
+                fi
+                arg="$(cd "$(dirname "${arg}")" && pwd)/$(basename "${arg}")"
+            fi
+            VIEW_ARGS+=("${arg}")
+        done
+        # macOS bash 3.2 treats an empty array as unset under set -u.
+        set -- ${VIEW_ARGS[@]+"${VIEW_ARGS[@]}"}
         # Vite's vuetify plugin resolves packages from the working directory, so run from the viewer's checkout.
         cd "${VIEWER_DIR}"
         exec node scripts/run-hf-model.mjs "$@"
