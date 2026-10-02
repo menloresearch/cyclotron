@@ -95,11 +95,12 @@ Load the latest checkpoint and visualize the trained policy:
     --task Asimov1-Velocity-AMP-Play-v0 --num_envs 32
 ```
 
-Use `--checkpoint` to select a specific checkpoint (`--target` is an alias),
-or `--onnx-output <path>` for an extra ONNX export. `--checkpoint` works the
-same way for `--train`, `--play` and `--share`: pass a full path to a `.pt`
-file, or a filename such as `model_500.pt` together with `--load_run <run>`.
-Without it, the latest checkpoint is used.
+Use `--checkpoint` to select a specific checkpoint (`--target` is an alias).
+`--checkpoint` works the same way for `--train`, `--play`, `--export` and
+`--share`: pass a full path to a `.pt` file, or a filename such as
+`model_500.pt` together with `--load_run <run>`. Without it, the latest
+checkpoint is used. Play runs the checkpoint itself and writes no ONNX; use
+[`--export`](#export-a-policy) for that.
 
 Checkpoints and logs are written to `logs/rsl_rl/<experiment_name>/<run>/`.
 
@@ -174,8 +175,8 @@ come from `env.yaml`. Use the sliders to command a velocity and push the robot.
 
 A local path runs in place, with no download: a run folder (its `exported/`
 policy), any folder holding `policy.onnx` and `env.yaml`, or an `.onnx` file.
-Run `--export` first; a policy written by `--play` alone has no `env.yaml`
-next to it, and the viewer refuses to guess its gains.
+For a run folder, run `--export` first. A folder without `env.yaml` next to
+the `.onnx` is refused: the viewer will not guess the policy's gains.
 
 Options: `--revision <ref>` (branch, tag or commit), `--port <n>` (default
 3000) and `--no-open`. Private or gated repos need `HF_TOKEN` set.
