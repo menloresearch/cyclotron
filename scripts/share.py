@@ -2,7 +2,7 @@
 
 Uploads ``params/agent.yaml``, ``params/env.yaml`` and ``exported/policy.onnx`` from a run directory,
 together with a generated model card. If the run has no ONNX export yet, the latest checkpoint is exported
-first via ``play.py --export-only``. Requires a prior ``hf auth login`` (or ``HF_TOKEN``).
+first with ``export.py``. Requires a prior ``hf auth login`` (or ``HF_TOKEN``).
 
 File paths from the training machine are reduced to file names in the uploaded yaml files; the run directory
 itself is not changed.
@@ -14,7 +14,7 @@ import re
 import subprocess
 import sys
 
-from cyclotron.hub import strip_local_paths
+from cyclotron.hub import infer_task, strip_local_paths
 
 README_TEMPLATE = """---
 library_name: asimov
@@ -38,13 +38,7 @@ DEFAULT_SUMMARY = (
     " priors (AMP)."
 )
 
-# Training task for each experiment name, used when exporting a run that has no policy.onnx yet.
-EXPERIMENT_TASKS = {
-    "asimov1_velocity": "Asimov1-Velocity-v0",
-    "asimov_velocity_amp": "Asimov1-Velocity-AMP-v0",
-}
-
-PLAY_SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "rsl_rl", "play.py")
+EXPORT_SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "rsl_rl", "export.py")
 
 parser = argparse.ArgumentParser(description="Upload a trained Cyclotron run to the Hugging Face Hub.")
 parser.add_argument("run_dir", type=str, help="Run directory, e.g. logs/rsl_rl/<experiment_name>/<run>.")
@@ -96,19 +90,9 @@ def resolve_checkpoint(run_dir: str, checkpoint: str) -> str:
     return os.path.abspath(path)
 
 
-def infer_task(agent_yaml_path: str) -> str:
-    with open(agent_yaml_path) as f:
-        match = re.search(r"^experiment_name: *(\S+)", f.read(), re.MULTILINE)
-    experiment_name = match.group(1).strip("'\"") if match else None
-    if experiment_name not in EXPERIMENT_TASKS:
-        sys.exit(f"[ERROR] Cannot infer the task for experiment '{experiment_name}'. Pass it with --task.")
-    return EXPERIMENT_TASKS[experiment_name]
-
-
 def export_onnx(checkpoint: str, task: str) -> None:
     print(f"[INFO] Exporting {checkpoint} to ONNX using task {task}")
-    command = [sys.executable, PLAY_SCRIPT, "--task", task, "--checkpoint", checkpoint]
-    command += ["--num_envs", "1", "--headless", "--export-only"]
+    command = [sys.executable, EXPORT_SCRIPT, "--task", task, "--checkpoint", checkpoint]
     if subprocess.run(command).returncode != 0:
         sys.exit("[ERROR] ONNX export failed.")
 
@@ -135,8 +119,11 @@ def main() -> None:
             checkpoint = resolve_checkpoint(run_dir, args_cli.checkpoint)
         else:
             checkpoint = latest_checkpoint(run_dir)
-        task = args_cli.task or infer_task(files["agent.yaml"])
-        # play.py exports next to the checkpoint, so upload from there.
+        try:
+            task = args_cli.task or infer_task(run_dir)
+        except ValueError as error:
+            sys.exit(f"[ERROR] {error}")
+        # export.py writes next to the checkpoint, so upload from there.
         files["policy.onnx"] = os.path.join(os.path.dirname(checkpoint), "exported", "policy.onnx")
 
     readme = README_TEMPLATE.format(title=args_cli.title, summary=args_cli.summary)

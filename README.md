@@ -103,6 +103,35 @@ Without it, the latest checkpoint is used.
 
 Checkpoints and logs are written to `logs/rsl_rl/<experiment_name>/<run>/`.
 
+## Export a policy
+
+Export a checkpoint to ONNX, the format that runs on the robot and in the
+viewer, without uploading anything:
+
+```bash
+./cyclotron.sh --export \
+    --checkpoint logs/rsl_rl/<experiment_name>/<run>/model_<n>.pt
+```
+
+This writes `exported/` next to the checkpoint, with the same files a shared
+policy has on the Hugging Face Hub:
+
+- `policy.onnx`: the policy, for the robot and the viewer
+- `policy.pt`: the same policy as TorchScript
+- `env.yaml` and `agent.yaml`: unchanged copies of the run's `params/`
+
+The task is read from the run's `agent.yaml`, so `--checkpoint` is enough. You
+can also pick the checkpoint the same way as `--play`, for example
+`--task Asimov1-Velocity-AMP-v0 --load_run <run>` for that run's latest
+checkpoint. Use `--output <folder>` to write somewhere else. Export runs Isaac
+Sim headless with one environment. It then feeds the same observations to the
+checkpoint and to `policy.onnx`, and fails if their actions differ by more than
+1e-4, which would mean the export is broken (for example, a dropped observation
+normalizer).
+
+To watch the exported policy in the browser, pass the run folder to
+[`--view`](#view-a-policy).
+
 ## Share your policy
 
 Share a finished run on the Hugging Face Hub. Log in first with
@@ -116,23 +145,24 @@ Share a finished run on the Hugging Face Hub. Log in first with
 This uploads `agent.yaml`, `env.yaml`, `policy.onnx` and a generated
 `README.md` model card (BSD-3-Clause, `library_name: asimov`,
 `pipeline_tag: robotics`). If the run has no `exported/policy.onnx` yet, the
-latest checkpoint is exported automatically; use `--checkpoint` to share a
+latest checkpoint is exported automatically with `--export`; use `--checkpoint` to share a
 different one (a full path, or a filename inside the run directory). Use `--title "<text>"` to set the card's title,
 `--summary "<text>"` to add a paragraph describing your training method,
 `--private` to create a private repo, and `--dry-run` to preview the card
 without uploading.
 
-## View a shared policy
+## View a policy
 
-To watch your own training runs, use `--play`. `--view` is for policies someone
-shared on the Hugging Face Hub, which contain only the ONNX policy and its
-config. It runs them in your browser with
+`--view` runs an ONNX policy and its config in your browser: one shared on the
+Hugging Face Hub, or one you exported. To watch a checkpoint in Isaac Sim
+instead, use `--play`. `--view` runs policies with
 [humanoid-policy-viewer](https://github.com/menloresearch/humanoid-policy-viewer)
 (MuJoCo + onnxruntime in WebAssembly), so it needs only
 [Node.js](https://nodejs.org) 20 or newer: no Isaac Sim and no GPU.
 
 ```bash
-./cyclotron.sh --view <org>/<model>
+./cyclotron.sh --view <org>/<model>                                   # from the Hub
+./cyclotron.sh --view logs/rsl_rl/<experiment_name>/<run>             # from --export
 ```
 
 On the first run this fetches the `third_party/humanoid-policy-viewer`
@@ -141,6 +171,11 @@ downloads `policy.onnx`, `env.yaml` and `agent.yaml` to
 `~/.cache/humanoid-policy-viewer/hf/`, checks them, and opens the viewer with
 the policy selected. The gains, action scale, default pose and torque limits
 come from `env.yaml`. Use the sliders to command a velocity and push the robot.
+
+A local path runs in place, with no download: a run folder (its `exported/`
+policy), any folder holding `policy.onnx` and `env.yaml`, or an `.onnx` file.
+Run `--export` first; a policy written by `--play` alone has no `env.yaml`
+next to it, and the viewer refuses to guess its gains.
 
 Options: `--revision <ref>` (branch, tag or commit), `--port <n>` (default
 3000) and `--no-open`. Private or gated repos need `HF_TOKEN` set.
