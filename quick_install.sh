@@ -12,6 +12,9 @@ cd "${ROOT}"
 sudo apt-get update && sudo apt-get install -y cmake build-essential libglu1-mesa
 
 git submodule update --init third_party/IsaacLab
+
+echo
+echo "Downloading asimov-1 STL files. This may take a while and prints nothing until it finishes..."
 git submodule update --init --filter=blob:none third_party/asimov-1
 git -C third_party/asimov-1 sparse-checkout set sim-model
 

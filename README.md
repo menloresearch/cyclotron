@@ -30,6 +30,8 @@ cd cyclotron
 ./quick_install.sh
 ```
 
+The full install takes a while, since it downloads Isaac Sim, PyTorch, Isaac Lab and the Asimov 1 robot model.
+
 #### Advanced Install
 
 If you already have your own Isaac Lab checkout you want
