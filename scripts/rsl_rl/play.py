@@ -34,6 +34,9 @@ parser.add_argument("--real-time", action="store_true", default=False, help="Run
 parser.add_argument(
     "--target", type=str, default=None, help="Direct path to the checkpoint file to play (alias for --checkpoint)."
 )
+parser.add_argument(
+    "--strict", action="store_true", help="Stop, instead of warning, if the code changed since the run was trained."
+)
 cli_args.add_rsl_rl_args(parser)
 AppLauncher.add_app_launcher_args(parser)
 args_cli, hydra_args = parser.parse_known_args()
@@ -81,7 +84,7 @@ from isaaclab.envs import (
     ManagerBasedRLEnvCfg,
     multi_agent_to_single_agent,
 )
-from isaaclab.utils.dict import print_dict
+from isaaclab.utils.dict import class_to_dict, print_dict
 
 from isaaclab_rl.rsl_rl import (
     RslRlBaseRunnerCfg,
@@ -93,7 +96,13 @@ from isaaclab_rl.utils.pretrained_checkpoint import get_published_pretrained_che
 
 import isaaclab_tasks  # noqa: F401
 import cyclotron.tasks  # noqa: F401
+from cyclotron.code_state import describe_changes, load_policy
 from isaaclab_tasks.utils.hydra import hydra_task_config
+
+CODE_CHANGE_CONSEQUENCE = (
+    "--play runs the checkpoint in an environment built from the current code, so it may behave differently than in"
+    " training."
+)
 
 
 @hydra_task_config(args_cli.task, args_cli.agent)
@@ -125,6 +134,19 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     env_cfg.log_dir = log_dir
 
     env = gym.make(args_cli.task, cfg=env_cfg, render_mode="rgb_array" if args_cli.video else None)
+    # Compared where train.py saves params/: after the environment is created, which resolves parts of the config.
+    changes, level = describe_changes(
+        log_dir, class_to_dict(env_cfg), class_to_dict(agent_cfg), CODE_CHANGE_CONSEQUENCE
+    )
+    print(changes)
+    if level == "error":
+        env.close()
+        sys.exit(1)
+    if level == "warning" and args_cli.strict:
+        # Isaac Sim replaces sys.exit with a version that only takes an exit code, so the message is printed first.
+        print("[ERROR] Stopped by --strict: the code changed since the run was trained (see above).")
+        env.close()
+        sys.exit(1)
 
     if isinstance(env.unwrapped, DirectMARLEnv):
         env = multi_agent_to_single_agent(env)
@@ -150,7 +172,12 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     else:
         raise ValueError(f"Unsupported runner class: {agent_cfg.class_name}")
     resume_path = handle_deprecated_rsl_rl_checkpoint(resume_path, installed_version)
-    runner.load(resume_path)
+    try:
+        load_policy(runner, resume_path, agent_cfg.class_name)
+    except ValueError as error:
+        print(f"[ERROR] {error}")
+        env.close()
+        sys.exit(1)
 
     policy = runner.get_inference_policy(device=env.unwrapped.device)
 

@@ -1,8 +1,9 @@
 """Upload a completed training run to the Hugging Face Hub.
 
-Uploads ``params/agent.yaml``, ``params/env.yaml`` and ``exported/policy.onnx`` from a run directory,
-together with a generated model card. If the run has no ONNX export yet, the latest checkpoint is exported
-first with ``export.py``. Requires a prior ``hf auth login`` (or ``HF_TOKEN``).
+Uploads ``params/agent.yaml``, ``params/env.yaml``, ``params/code_state.yaml`` (for runs that have one) and
+``exported/policy.onnx`` from a run directory, together with a generated model card. If the run has no ONNX export
+yet, the latest checkpoint is exported first with ``export.py``. Requires a prior ``hf auth login`` (or
+``HF_TOKEN``).
 
 File paths from the training machine are reduced to file names in the uploaded yaml files; the run directory
 itself is not changed.
@@ -29,8 +30,12 @@ license: bsd-3-clause
 - `policy.onnx` is the exported policy for inference, producing joint-position actions.
 - `agent.yaml` records the actor-critic and AMP training settings, including the motion data configuration.
 - `env.yaml` records the simulation and locomotion task settings, including observations, actions, commands, and rewards.
-- Training and evaluation code: [menloresearch/cyclotron](https://github.com/menloresearch/cyclotron).
+{code_state}- Training and evaluation code: [menloresearch/cyclotron](https://github.com/menloresearch/cyclotron).
 """
+CODE_STATE_LINE = (
+    "- `code_state.yaml` records the code the policy was trained with: the commit, a hash of each training-code"
+    " file, the robot model and the package versions.\n"
+)
 
 DEFAULT_TITLE = "Asimov 1 locomotion policy checkpoint"
 DEFAULT_SUMMARY = (
@@ -112,6 +117,11 @@ def main() -> None:
         missing.append(onnx_path)
     if missing:
         sys.exit("[ERROR] Missing files:\n  " + "\n  ".join(missing))
+    code_state = os.path.join(run_dir, "params", "code_state.yaml")
+    if os.path.isfile(code_state):
+        files["code_state.yaml"] = code_state
+    else:
+        print("[INFO] The run has no params/code_state.yaml (it was trained before training recorded one).")
 
     needs_export = not onnx_path and (args_cli.checkpoint or not os.path.isfile(files["policy.onnx"]))
     if needs_export:
@@ -126,12 +136,18 @@ def main() -> None:
         # export.py writes next to the checkpoint, so upload from there.
         files["policy.onnx"] = os.path.join(os.path.dirname(checkpoint), "exported", "policy.onnx")
 
-    readme = README_TEMPLATE.format(title=args_cli.title, summary=args_cli.summary)
+    readme = README_TEMPLATE.format(
+        title=args_cli.title,
+        summary=args_cli.summary,
+        code_state=CODE_STATE_LINE if "code_state.yaml" in files else "",
+    )
 
     # Upload copies of the yaml files without the training machine's file paths; the run directory is left as is.
     yamls = {}
-    for name in ("agent.yaml", "env.yaml"):
-        with open(files[name]) as f:
+    for name, yaml_path in files.items():
+        if not name.endswith(".yaml"):
+            continue
+        with open(yaml_path) as f:
             yamls[name], removed = strip_local_paths(f.read())
         for path in removed:
             print(f"[INFO] Removing local path from {name}: {path}")

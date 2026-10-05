@@ -100,7 +100,9 @@ Use `--checkpoint` to select a specific checkpoint (`--target` is an alias).
 `--share`: pass a full path to a `.pt` file, or a filename such as
 `model_500.pt` together with `--load_run <run>`. Without it, the latest
 checkpoint is used. Play runs the checkpoint itself and writes no ONNX; use
-[`--export`](#export-a-policy) for that.
+[`--export`](#export-a-policy) for that. Before running, play warns about
+anything that changed in the code since the run was trained; see
+[Code changes since training](#code-changes-since-training).
 
 Checkpoints and logs are written to `logs/rsl_rl/<experiment_name>/<run>/`.
 
@@ -120,6 +122,8 @@ policy has on the Hugging Face Hub:
 - `policy.onnx`: the policy, for the robot and the viewer
 - `policy.pt`: the same policy as TorchScript
 - `env.yaml` and `agent.yaml`: unchanged copies of the run's `params/`
+- `code_state.yaml`: the code the run was trained with, for runs that have one
+  (see [Code changes since training](#code-changes-since-training))
 
 The task is read from the run's `agent.yaml`, so `--checkpoint` is enough. You
 can also pick the checkpoint the same way as `--play`, for example
@@ -133,6 +137,41 @@ normalizer).
 To watch the exported policy in the browser, pass the run folder to
 [`--view`](#view-a-policy).
 
+## Code changes since training
+
+`--export` and `--play` rebuild the policy from the code you have checked out
+now, so a run trained with different code can load wrongly or behave
+differently. Training therefore writes `params/code_state.yaml` next to
+`env.yaml` and `agent.yaml`: the git commit and branch, a hash of every
+training-code file in the cyclotron package, the Isaac Lab commit, a hash of
+the robot model, and the `isaacsim`, `isaaclab`, `rsl-rl-lib` and `torch`
+versions. It holds hashes, not code.
+
+Before loading a checkpoint, export and play compare the run with the current
+code and print what changed:
+
+- **Policy settings**: what the policy sees and does. That is the actor's
+  observation terms (order, functions, parameters, scales, clipping, history),
+  the actions, the robot's default pose and actuators, the control rate and
+  the actor network. Each difference is named by its Hydra override path, for
+  example `env.observations.policy.base_ang_vel.scale: 0.25 -> 0.5`, so you can
+  pass the trained value back on the command line. Critic and AMP inputs,
+  rewards, events, terrain, command ranges and observation noise are not
+  compared: they only shape training, and the play tasks change some of them.
+- **Code**: cyclotron files that changed, and changes to Isaac Lab, the robot
+  model or the package versions. Runs trained before `code_state.yaml` existed
+  are compared with the commits rsl_rl logged in the run's `git/` folder.
+
+These are warnings, since experiments change code on purpose; add `--strict` to
+stop instead. Two cases always stop. One is a checkpoint whose policy no longer
+fits the network the current code builds, for example because an observation
+term was added and the input size changed. The other is a changed actor class
+or activation, which would load the old weights but compute something else.
+
+Export and play load only the policy from the checkpoint. The critic and the
+AMP discriminator are only used in training, so a run whose critic saw extra
+privileged inputs still exports and plays.
+
 ## Share your policy
 
 Share a finished run on the Hugging Face Hub. Log in first with
@@ -143,8 +182,8 @@ Share a finished run on the Hugging Face Hub. Log in first with
     --repo-id <user_or_org>/<repo_name>
 ```
 
-This uploads `agent.yaml`, `env.yaml`, `policy.onnx` and a generated
-`README.md` model card (BSD-3-Clause, `library_name: asimov`,
+This uploads `agent.yaml`, `env.yaml`, `policy.onnx`, `code_state.yaml` (for
+runs that have one) and a generated `README.md` model card (BSD-3-Clause, `library_name: asimov`,
 `pipeline_tag: robotics`). If the run has no `exported/policy.onnx` yet, the
 latest checkpoint is exported automatically with `--export`; use `--checkpoint` to share a
 different one (a full path, or a filename inside the run directory). Use `--title "<text>"` to set the card's title,

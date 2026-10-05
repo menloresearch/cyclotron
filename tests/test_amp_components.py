@@ -168,3 +168,39 @@ def test_amp_ppo_clips_one_combined_actor_critic_gradient_norm():
 
     torch.testing.assert_close(original_norm, torch.tensor(3.0))
     assert clipped_norm <= algorithm.max_grad_norm + 1.0e-6
+
+
+def make_amp_ppo(critic_dim: int, amp_dim: int, seed: int) -> AMPPPO:
+    torch.manual_seed(seed)
+    obs = TensorDict(
+        {"policy": torch.randn(2, 4), "critic": torch.randn(2, critic_dim), "amp": torch.randn(2, amp_dim)},
+        batch_size=[2],
+    )
+    obs_groups = {"actor": ["policy"], "critic": ["critic"]}
+    distribution = {"class_name": "GaussianDistribution", "init_std": 1.0}
+    actor = MLPModel(obs, obs_groups, "actor", 2, hidden_dims=[8], distribution_cfg=distribution)
+    critic = MLPModel(obs, obs_groups, "critic", 1, hidden_dims=[8])
+    storage = RolloutStorage("rl", 2, 1, obs, [2], "cpu")
+    return AMPPPO(actor, critic, storage, amp_data=object(), amp_observation_dim=amp_dim, device="cpu")
+
+
+def test_loading_only_the_actor_ignores_a_critic_and_discriminator_that_no_longer_fit():
+    # An experiment checkpoint: its critic and discriminator saw inputs the current task no longer builds.
+    saved = make_amp_ppo(critic_dim=8, amp_dim=4, seed=0).save()
+    current = make_amp_ppo(critic_dim=5, amp_dim=3, seed=1)
+    critic_before = {name: value.clone() for name, value in current.critic.state_dict().items()}
+
+    current.load(saved, {"actor": True}, strict=True)
+
+    for name, value in current.actor.state_dict().items():
+        torch.testing.assert_close(value, saved["actor_state_dict"][name])
+    for name, value in current.critic.state_dict().items():
+        torch.testing.assert_close(value, critic_before[name])
+
+
+def test_resuming_training_still_restores_the_discriminator():
+    saved = make_amp_ppo(critic_dim=5, amp_dim=3, seed=0).save()
+    current = make_amp_ppo(critic_dim=5, amp_dim=3, seed=1)
+    current.load(saved, None, strict=True)
+    for name, value in current.discriminator.state_dict().items():
+        torch.testing.assert_close(value, saved["discriminator_state_dict"][name])

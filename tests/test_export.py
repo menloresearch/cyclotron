@@ -42,6 +42,17 @@ def test_copy_run_yamls_copies_unchanged_and_reports_missing(tmp_path):
     output_dir.mkdir()
     assert copy_run_yamls(run_dir, str(output_dir)) == ["agent.yaml"]
     assert (output_dir / "env.yaml").read_text() == "asset_path: /home/me/asimov_1.urdf\n"
+    assert not (output_dir / "code_state.yaml").exists()
+
+
+def test_copy_run_yamls_copies_code_state_when_the_run_has_one(tmp_path):
+    run_dir = make_run(tmp_path)
+    with open(os.path.join(run_dir, "params", "code_state.yaml"), "w") as f:
+        f.write("packages: {}\n")
+    output_dir = tmp_path / "exported"
+    output_dir.mkdir()
+    assert copy_run_yamls(run_dir, str(output_dir)) == []
+    assert (output_dir / "code_state.yaml").read_text() == "packages: {}\n"
 
 
 def make_policy(obs: TensorDict, obs_normalization: bool) -> MLPModel:

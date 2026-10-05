@@ -444,6 +444,7 @@ class AMPPPO(PPO):
                 "optimizer": True,
                 "iteration": True,
                 "rnd": True,
+                "discriminator": True,
             }
 
         split_optimizer = "amp_optimizer_state_dict" in loaded_dict
@@ -452,7 +453,8 @@ class AMPPPO(PPO):
             ppo_load_cfg["optimizer"] = False
         load_iteration = super().load(loaded_dict, ppo_load_cfg, strict)
 
-        if "discriminator_state_dict" in loaded_dict:
+        # Export and play load only the actor, so a discriminator that no longer fits doesn't stop them.
+        if requested_load_cfg.get("discriminator") and "discriminator_state_dict" in loaded_dict:
             self.discriminator.load_state_dict(loaded_dict["discriminator_state_dict"], strict=strict)
         if split_optimizer and requested_load_cfg.get("optimizer"):
             self._load_split_optimizer_states(

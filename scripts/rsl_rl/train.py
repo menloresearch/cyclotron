@@ -80,13 +80,14 @@ from isaaclab.envs import (
     ManagerBasedRLEnvCfg,
     multi_agent_to_single_agent,
 )
-from isaaclab.utils.dict import print_dict
+from isaaclab.utils.dict import class_to_dict, print_dict
 from isaaclab.utils.io import dump_yaml
 
 from isaaclab_rl.rsl_rl import RslRlBaseRunnerCfg, RslRlVecEnvWrapper, handle_deprecated_rsl_rl_cfg
 
 import isaaclab_tasks  # noqa: F401
 import cyclotron.tasks  # noqa: F401
+from cyclotron.code_state import record_code_state, write_code_state
 from isaaclab_tasks.utils.hydra import hydra_task_config
 
 logger = logging.getLogger(__name__)
@@ -161,7 +162,8 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
 
     # Passing --checkpoint implies --resume.
     agent_cfg.resume = agent_cfg.resume or args_cli.checkpoint is not None
-    if agent_cfg.resume or agent_cfg.algorithm.class_name == "Distillation":
+    loads_checkpoint = agent_cfg.resume or agent_cfg.algorithm.class_name == "Distillation"
+    if loads_checkpoint:
         resume_path = cli_args.resolve_checkpoint(log_root_path, agent_cfg, args_cli)
 
     if args_cli.video:
@@ -186,12 +188,17 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     else:
         raise ValueError(f"Unsupported runner class: {agent_cfg.class_name}")
     runner.add_git_repo_to_log(__file__)
-    if agent_cfg.resume or agent_cfg.algorithm.class_name == "Distillation":
+    if loads_checkpoint:
         print(f"[INFO]: Loading model checkpoint from: {resume_path}")
         runner.load(resume_path)
 
     dump_yaml(os.path.join(log_dir, "params", "env.yaml"), env_cfg)
     dump_yaml(os.path.join(log_dir, "params", "agent.yaml"), agent_cfg)
+    # What --export and --play compare against to warn about code changes; <run>/<file>, not a local path.
+    loaded = os.path.join(*resume_path.split(os.sep)[-2:]) if loads_checkpoint else None
+    write_code_state(
+        os.path.join(log_dir, "params"), record_code_state(class_to_dict(env_cfg), loaded_checkpoint=loaded)
+    )
 
     print_run_info(log_dir)
     try:

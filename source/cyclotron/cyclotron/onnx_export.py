@@ -11,20 +11,23 @@ from tensordict import TensorDict
 
 # The run's training config, copied next to policy.onnx so the export folder has the same files as a shared Hub repo.
 BUNDLE_YAMLS = ("env.yaml", "agent.yaml")
+# The record of the code the run was trained with; runs trained before it existed don't have one.
+OPTIONAL_BUNDLE_YAMLS = ("code_state.yaml",)
 
 
 def copy_run_yamls(run_dir: str, output_dir: str) -> list[str]:
-    """Copy ``params/env.yaml`` and ``params/agent.yaml`` from the run into the export folder.
+    """Copy ``params/env.yaml``, ``params/agent.yaml`` and, if present, ``params/code_state.yaml`` from the run into
+    the export folder.
 
     The copies are unchanged; ``--share`` strips the training machine's file paths only from what it uploads.
-    Returns the names of the yaml files the run does not have.
+    Returns the names of the required yaml files the run does not have.
     """
     missing = []
-    for name in BUNDLE_YAMLS:
+    for name in BUNDLE_YAMLS + OPTIONAL_BUNDLE_YAMLS:
         source = os.path.join(run_dir, "params", name)
         if os.path.isfile(source):
             shutil.copyfile(source, os.path.join(output_dir, name))
-        else:
+        elif name in BUNDLE_YAMLS:
             missing.append(name)
     return missing
 
