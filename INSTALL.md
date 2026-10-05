@@ -123,11 +123,14 @@ The `asimov-1` submodule provides the robot's URDF and meshes at
 `third_party/asimov-1/sim-model`; the robot configuration uses this location
 by default, so no path changes are needed. Its repository is large (mostly
 unrelated CAD/fabrication files), so this fetches only the `sim-model`
-subtree via sparse-checkout:
+subtree by setting up a sparse checkout before checking out the pinned commit:
 
 ```bash
-git submodule update --init --filter=blob:none third_party/asimov-1
+git clone --filter=blob:none --no-checkout https://github.com/menloresearch/asimov-1.git third_party/asimov-1
 git -C third_party/asimov-1 sparse-checkout set sim-model
+git -C third_party/asimov-1 checkout "$(git rev-parse HEAD:third_party/asimov-1)"
+git submodule absorbgitdirs third_party/asimov-1
+git submodule init third_party/asimov-1
 ```
 
 To use a robot model stored elsewhere, set `ASIMOV_1_MODEL_DIR` to a
