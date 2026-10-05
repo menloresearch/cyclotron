@@ -173,7 +173,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         raise ValueError(f"Unsupported runner class: {agent_cfg.class_name}")
     resume_path = handle_deprecated_rsl_rl_checkpoint(resume_path, installed_version)
     try:
-        load_policy(runner, resume_path, agent_cfg.class_name)
+        load_policy(runner, resume_path, agent_cfg.class_name, log_dir)
     except ValueError as error:
         print(f"[ERROR] {error}")
         env.close()

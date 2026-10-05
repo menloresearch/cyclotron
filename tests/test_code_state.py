@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import copy
 import os
+import re
 import shutil
 import subprocess
+from types import SimpleNamespace
 
 import pytest
 import torch
@@ -19,11 +21,13 @@ from cyclotron.code_state import (
     hash_files,
     interface_differences,
     load_config,
+    load_policy,
     normalize_config,
     policy_interface,
     policy_shape_errors,
     read_git_records,
     record_code_state,
+    training_code,
     write_code_state,
 )
 
@@ -324,6 +328,11 @@ def test_describe_changes_is_quiet_when_nothing_changed_and_warns_otherwise(tmp_
     agent["actor"]["activation"] = "relu"
     message, level = describe_changes(str(tmp_path), env, agent, "Behaviour may differ.")
     assert level == "error" and "agent.actor.activation: elu -> relu" in message and "Behaviour" not in message
+    # The error names the commit to check out, from the run's code_state.yaml.
+    assert re.fullmatch(
+        r"  Check out the code the run was trained with \(.+ @ [0-9a-f]{7}.*\), or train a new run\.",
+        message.splitlines()[-1],
+    )
 
     os.remove(params / "env.yaml")
     message, level = describe_changes(str(tmp_path), env, agent, "Behaviour may differ.")
@@ -347,3 +356,59 @@ def test_policy_shape_errors_name_the_inputs_outputs_and_layers():
         "mlp.0.weight: checkpoint [23, 256], current code [512, 78]",
     ]
     assert policy_shape_errors(saved, saved) == []
+
+
+def write_git_record(run_dir, name: str, commit: str, branch: str, diff: str = "") -> None:
+    git = run_dir / "git"
+    git.mkdir(exist_ok=True)
+    (git / name).write_text(
+        f"--- git commit ---\n{commit}\n\n\n--- git status ---\nOn branch {branch}\n\n\n--- git diff ---\n{diff}"
+    )
+
+
+def test_training_code_names_the_commit_to_check_out(tmp_path):
+    new_run, old_run, unknown = tmp_path / "new", tmp_path / "old", tmp_path / "unknown"
+    write_code_state(
+        str(new_run / "params"), {"cyclotron": {"commit": "32aef5c5ec11", "branch": "exp/drift", "dirty": True}}
+    )
+    assert training_code(str(new_run)) == "exp/drift @ 32aef5c with uncommitted changes"
+    # Runs from before code_state.yaml: every commit rsl_rl logged, since either could be the training code.
+    old_run.mkdir()
+    write_git_record(old_run, "drift.diff", "32aef5c5ec11641f785bfd3c4aebb9c4de6bdc6b", "exp/drift")
+    write_git_record(old_run, "isaac_asimov.diff", "bdf28f5e8b60584fd6b8b50b7433d639c5d8b958", "main")
+    assert training_code(str(old_run)) == (
+        "exp/drift @ 32aef5c (git/drift.diff) or main @ bdf28f5 (git/isaac_asimov.diff)"
+    )
+    unknown.mkdir()
+    assert training_code(str(unknown)) is None
+
+
+def test_load_policy_loads_only_the_actor_or_names_the_training_code(tmp_path):
+    torch.manual_seed(0)
+    trained = torch.nn.Sequential(torch.nn.Linear(78, 8), torch.nn.ELU(), torch.nn.Linear(8, 23))
+    checkpoint = tmp_path / "model_1.pt"
+    torch.save(
+        {"actor_state_dict": trained.state_dict(), "critic_state_dict": {"0.weight": torch.zeros(1, 96)}}, checkpoint
+    )
+    write_git_record(tmp_path, "drift.diff", "32aef5c5ec11641f785bfd3c4aebb9c4de6bdc6b", "exp/drift")
+
+    loads = []
+    policy = {"network": torch.nn.Sequential(torch.nn.Linear(78, 8), torch.nn.ELU(), torch.nn.Linear(8, 23))}
+    runner = SimpleNamespace(
+        alg=SimpleNamespace(get_policy=lambda: policy["network"]),
+        load=lambda path, load_cfg=None: loads.append(load_cfg),
+    )
+    load_policy(runner, str(checkpoint), "OnPolicyRunner", str(tmp_path))
+    assert loads == [{"actor": True}]
+
+    policy["network"] = torch.nn.Sequential(torch.nn.Linear(55, 8), torch.nn.ELU(), torch.nn.Linear(8, 23))
+    with pytest.raises(ValueError) as error:
+        load_policy(runner, str(checkpoint), "OnPolicyRunner", str(tmp_path))
+    assert str(error.value).splitlines() == [
+        "The checkpoint's policy doesn't fit the network the current code builds:",
+        "  0.weight: checkpoint [8, 78], current code [8, 55] (the policy takes 78 inputs; the current observations"
+        " give 55)",
+        "The policy's inputs or network changed since training; see the warning above.",
+        "Check out the code the run was trained with (exp/drift @ 32aef5c (git/drift.diff)), or train a new run.",
+    ]
+    assert loads == [{"actor": True}]

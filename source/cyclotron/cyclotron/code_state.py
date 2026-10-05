@@ -381,6 +381,27 @@ def code_differences(run_dir: str, current: dict) -> list[str]:
         return compare_code_state(yaml.safe_load(f) or {}, current)
 
 
+def training_code(run_dir: str) -> str | None:
+    """Where the code a run was trained with is, e.g. ``exp/drift @ 32aef5c``, or None if the run doesn't say.
+
+    Runs trained before ``code_state.yaml`` existed can name several commits: rsl_rl logged one per repository.
+    """
+    path = os.path.join(run_dir, "params", CODE_STATE_FILE)
+    if os.path.isfile(path):
+        with open(path) as f:
+            code = (yaml.safe_load(f) or {}).get("cyclotron") or {}
+        return _where(code) if code.get("commit") else None
+    records = {record["commit"]: record for record in read_git_records(run_dir)}.values()
+    return " or ".join(f"{_where(record)} (git/{record['file']})" for record in records) or None
+
+
+def _check_out_hint(run_dir: str) -> str:
+    trained = training_code(run_dir)
+    if not trained:
+        return "Train a new run, or check out the code the run was trained with (the run doesn't record its commit)."
+    return f"Check out the code the run was trained with ({trained}), or train a new run."
+
+
 # -- Putting it together for export and play ---------------------------------------------------------------------
 
 
@@ -417,7 +438,7 @@ def describe_changes(run_dir: str, env_cfg: dict, agent_cfg: dict, consequence: 
     if code:
         lines += ["  Code:"] + [f"    {line}" for line in code]
     if errors:
-        lines.append("  Check out the code the run was trained with, or train a new run.")
+        lines.append(f"  {_check_out_hint(run_dir)}")
     else:
         lines.append(f"  {consequence}")
     return "\n".join(lines), "error" if errors else "warning"
@@ -462,10 +483,11 @@ def policy_shape_errors(saved: dict, current: dict) -> list[str]:
     return lines
 
 
-def load_policy(runner, checkpoint: str, runner_class: str) -> None:
+def load_policy(runner, checkpoint: str, runner_class: str, run_dir: str) -> None:
     """Restore only the policy from ``checkpoint`` into ``runner``, after checking it fits the current network.
 
-    Raises ``ValueError`` with a plain description when it doesn't, instead of PyTorch's size-mismatch error.
+    Raises ``ValueError`` with a plain description when it doesn't, instead of PyTorch's size-mismatch error,
+    naming the code the run in ``run_dir`` was trained with.
     """
     import torch
 
@@ -480,6 +502,7 @@ def load_policy(runner, checkpoint: str, runner_class: str) -> None:
         raise ValueError(
             "The checkpoint's policy doesn't fit the network the current code builds:\n"
             + "\n".join(f"  {line}" for line in errors)
-            + "\nThe policy's inputs or network changed since training; see the warning above."
+            + "\nThe policy's inputs or network changed since training; see the warning above.\n"
+            + _check_out_hint(run_dir)
         )
     runner.load(checkpoint, load_cfg=inference_load_cfg(runner_class))
