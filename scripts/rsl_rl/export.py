@@ -97,8 +97,15 @@ from isaaclab_rl.rsl_rl import (
 from isaaclab_tasks.utils.hydra import hydra_task_config
 
 import cyclotron.tasks  # noqa: F401
-from cyclotron.code_state import describe_changes, load_policy
-from cyclotron.onnx_export import BUNDLE_YAMLS, OPTIONAL_BUNDLE_YAMLS, copy_run_yamls, max_onnx_difference
+from cyclotron.code_state import describe_changes, load_policy, training_commit
+from cyclotron.onnx_export import (
+    BUNDLE_YAMLS,
+    OPTIONAL_BUNDLE_YAMLS,
+    attach_deploy_metadata,
+    copy_run_yamls,
+    deploy_metadata,
+    max_onnx_difference,
+)
 
 installed_version = metadata.version("rsl-rl-lib")
 
@@ -106,6 +113,58 @@ CODE_CHANGE_CONSEQUENCE = (
     "policy.onnx comes from the checkpoint and env.yaml from the run, so they still match each other, but the ONNX"
     " check runs on observations from the current code."
 )
+
+
+def _per_joint(value, count: int) -> list[float]:
+    """A term's resolved scale or offset (a float, or a tensor row per env) as one float per joint."""
+    import torch
+
+    if isinstance(value, torch.Tensor):
+        return [float(v) for v in value[0]]
+    return [float(value)] * count
+
+
+def gather_deploy_metadata(env, policy, run_dir: str) -> dict[str, str] | None:
+    """Resolve the deployment contract from the live environment, or None (with a message) if an action term
+    is not a joint action and the contract cannot describe it."""
+    manager = env.unwrapped.action_manager
+    joint_names, scale, offset, clip, stiffness, damping = [], [], [], [], [], []
+    clipped = False
+    for name in manager.active_terms:
+        term = manager.get_term(name)
+        names = getattr(term, "_joint_names", None)
+        if names is None:
+            print(f"[WARNING] Action term {name} is not a joint action; not attaching deploy metadata.")
+            return None
+        joint_names += list(names)
+        scale += _per_joint(term._scale, len(names))
+        offset += _per_joint(term._offset, len(names))
+        # The configured gains, not the simulated ones, which startup randomization events can perturb.
+        stiffness += [float(v) for v in term._asset.data.default_joint_stiffness[0, term._joint_ids]]
+        damping += [float(v) for v in term._asset.data.default_joint_damping[0, term._joint_ids]]
+        if term.cfg.clip is None:
+            clip += [[None, None]] * len(names)
+        else:
+            clipped = True
+            # None for an unclipped side: the resolver fills joints the config does not name with +-inf.
+            clip += [[None if abs(side) == float("inf") else side for side in pair] for pair in term._clip[0].tolist()]
+    observations = env.unwrapped.observation_manager.active_terms
+    groups = [group for group in policy.obs_groups if group in observations]
+    observation_names = [
+        name if len(groups) == 1 else f"{group}/{name}" for group in groups for name in observations[group]
+    ]
+    return deploy_metadata(
+        joint_names=joint_names,
+        action_scale=scale,
+        action_offset=offset,
+        action_clip=clip if clipped else None,
+        joint_stiffness=stiffness,
+        joint_damping=damping,
+        sim_dt=env.unwrapped.physics_dt,
+        decimation=env.unwrapped.cfg.decimation,
+        observation_names=observation_names,
+        trained_commit=training_commit(run_dir),
+    )
 
 
 @hydra_task_config(args_cli.task, "rsl_rl_cfg_entry_point")
@@ -166,6 +225,11 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     missing = copy_run_yamls(run_dir, output_dir)
     for name in missing:
         print(f"[WARNING] {run_dir}/params/{name} not found; the viewer and --share need it next to policy.onnx.")
+
+    metadata = gather_deploy_metadata(env, policy, run_dir)
+    if metadata is not None:
+        attach_deploy_metadata(os.path.join(output_dir, "policy.onnx"), metadata)
+        print(f"[INFO] Attached deploy metadata to policy.onnx: {', '.join(metadata)}, obs_dim, action_dim.")
 
     difference = None
     if policy.is_recurrent:

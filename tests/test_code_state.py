@@ -28,6 +28,7 @@ from cyclotron.code_state import (
     read_git_records,
     record_code_state,
     training_code,
+    training_commit,
     write_code_state,
 )
 
@@ -381,6 +382,20 @@ def test_training_code_names_the_commit_to_check_out(tmp_path):
     )
     unknown.mkdir()
     assert training_code(str(unknown)) is None
+
+
+def test_training_commit_returns_a_single_raw_commit_or_none(tmp_path):
+    new_run, old_run, ambiguous = tmp_path / "new", tmp_path / "old", tmp_path / "ambiguous"
+    write_code_state(str(new_run / "params"), {"cyclotron": {"commit": "32aef5c5ec11", "branch": "exp/drift"}})
+    assert training_commit(str(new_run)) == "32aef5c5ec11"
+    old_run.mkdir()
+    write_git_record(old_run, "isaac_asimov.diff", "bdf28f5e8b60584fd6b8b50b7433d639c5d8b958", "main")
+    assert training_commit(str(old_run)) == "bdf28f5e8b60584fd6b8b50b7433d639c5d8b958"
+    # Two logged repositories: either could be the training code, so no single commit is named.
+    ambiguous.mkdir()
+    write_git_record(ambiguous, "a.diff", "32aef5c5ec11641f785bfd3c4aebb9c4de6bdc6b", "exp/drift")
+    write_git_record(ambiguous, "b.diff", "bdf28f5e8b60584fd6b8b50b7433d639c5d8b958", "main")
+    assert training_commit(str(ambiguous)) is None
 
 
 def test_load_policy_loads_only_the_actor_or_names_the_training_code(tmp_path):

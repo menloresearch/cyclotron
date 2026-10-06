@@ -134,6 +134,18 @@ checkpoint and to `policy.onnx`, and fails if their actions differ by more than
 1e-4, which would mean the export is broken (for example, a dropped observation
 normalizer).
 
+`policy.onnx` also carries a small deployment contract in its ONNX metadata,
+so a robot runtime can check its assumptions about the file before driving
+the robot with it: the joint order the actions are in, the per-joint scale,
+offset and clip that turn raw actions into position targets, the PD gains
+(kp/kd) the targets were trained to be tracked with, the policy rate
+(`sim.dt` x `decimation`), the input and output widths, the ordered
+observation terms, and the commit the run was trained with. It is a
+handshake, not configuration: the runtime should verify its own settings
+against these values and refuse on mismatch, not configure itself from them;
+torque limits and the actuator model stay in `env.yaml` and in the runtime's
+own config. Runtimes that do not read metadata are unaffected.
+
 To watch the exported policy in the browser, pass the run folder to
 [`--view`](#view-a-policy).
 

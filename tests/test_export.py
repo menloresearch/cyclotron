@@ -10,7 +10,7 @@ from rsl_rl.runners import OnPolicyRunner
 from tensordict import TensorDict
 
 from cyclotron.hub import infer_task
-from cyclotron.onnx_export import copy_run_yamls, max_onnx_difference
+from cyclotron.onnx_export import attach_deploy_metadata, copy_run_yamls, deploy_metadata, max_onnx_difference
 
 
 def make_run(
@@ -94,3 +94,58 @@ def test_onnx_without_the_normalizer_is_caught(tmp_path, trained):
     unnormalized.mlp.load_state_dict(policy.mlp.state_dict())
     unnormalized.distribution.load_state_dict(policy.distribution.state_dict())
     assert max_onnx_difference(policy, obs, export(unnormalized, tmp_path)) > 1e-2
+
+
+def sample_metadata(**overrides):
+    values = dict(
+        joint_names=["hip", "knee", "ankle", "toe"],
+        action_scale=[0.25, 0.25, 0.25, 0.5],
+        action_offset=[0.1, -0.4, 0.3, 0.0],
+        action_clip=None,
+        joint_stiffness=[100.0, 100.0, 40.0, 20.0],
+        joint_damping=[5.0, 5.0, 2.0, 1.0],
+        sim_dt=0.005,
+        decimation=4,
+        observation_names=["base_ang_vel", "joint_pos"],
+        trained_commit="32aef5c5ec11",
+    )
+    return deploy_metadata(**{**values, **overrides})
+
+
+def test_deploy_metadata_round_trip_leaves_the_graph_unchanged(tmp_path, trained):
+    import json
+
+    import onnx
+
+    policy, _ = trained
+    path = export(policy, tmp_path)
+    graph_before = onnx.load(path).graph.SerializeToString()
+    attach_deploy_metadata(path, sample_metadata(action_clip=[[None, None], [-1.0, 1.0], [None, 2.0], [None, None]]))
+    model = onnx.load(path)
+    assert model.graph.SerializeToString() == graph_before
+    read = {entry.key: entry.value for entry in model.metadata_props}
+    # The policy reads the 6-wide "policy" group and the 2-wide "extra" group; the graph outputs 4 actions.
+    assert read["obs_dim"] == "8" and read["action_dim"] == "4"
+    assert read["deploy_metadata_version"] == "1"
+    assert json.loads(read["joint_names"]) == ["hip", "knee", "ankle", "toe"]
+    assert json.loads(read["action_clip"])[1] == [-1.0, 1.0]
+    assert float(read["policy_rate_hz"]) == 50.0 and read["decimation"] == "4"
+    assert read["trained_commit"] == "32aef5c5ec11"
+
+
+def test_deploy_metadata_attach_replaces_earlier_values(tmp_path, trained):
+    policy, _ = trained
+    path = export(policy, tmp_path)
+    attach_deploy_metadata(path, sample_metadata())
+    attach_deploy_metadata(path, sample_metadata(action_scale=[1.0, 1.0, 1.0, 1.0]))
+    import onnx
+
+    entries = [entry for entry in onnx.load(path).metadata_props if entry.key == "action_scale"]
+    assert len(entries) == 1 and entries[0].value == "[1.0, 1.0, 1.0, 1.0]"
+
+
+def test_deploy_metadata_rejects_mismatched_lengths():
+    with pytest.raises(ValueError, match="one entry per action"):
+        sample_metadata(action_scale=[0.25])
+    with pytest.raises(ValueError, match="pair per action"):
+        sample_metadata(action_clip=[[None, None]])

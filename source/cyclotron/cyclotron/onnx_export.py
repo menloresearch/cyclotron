@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 
@@ -13,6 +14,73 @@ from tensordict import TensorDict
 BUNDLE_YAMLS = ("env.yaml", "agent.yaml")
 # The record of the code the run was trained with; runs trained before it existed don't have one.
 OPTIONAL_BUNDLE_YAMLS = ("code_state.yaml",)
+
+# Schema of the deploy metadata attached to policy.onnx; firmware should refuse versions it does not know.
+DEPLOY_METADATA_VERSION = "1"
+
+
+def deploy_metadata(
+    joint_names: list[str],
+    action_scale: list[float],
+    action_offset: list[float],
+    action_clip: list[list[float]] | None,
+    joint_stiffness: list[float],
+    joint_damping: list[float],
+    sim_dt: float,
+    decimation: int,
+    observation_names: list[str],
+    trained_commit: str | None,
+) -> dict[str, str]:
+    """The deployment contract of a policy, as the strings stored in ONNX metadata.
+
+    Only what a runtime must agree with the policy about before driving a robot with it: the joint order the actions
+    are in, the affine that turns raw actions into position targets (``target = action * scale + offset``, then an
+    optional ``[low, high]`` clip per joint), the PD gains the targets were trained to be tracked with, the rate the
+    policy was trained to run at, the ordered observation terms its input is built from, and the training commit for
+    traceability. Training settings stay in the yaml files next to the ONNX; they are not deployment inputs.
+    """
+    per_joint = [action_scale, action_offset, joint_stiffness, joint_damping]
+    if any(len(values) != len(joint_names) for values in per_joint):
+        raise ValueError("action_scale, action_offset, joint_stiffness and joint_damping need one entry per action")
+    if action_clip is not None and len(action_clip) != len(joint_names):
+        raise ValueError("action_clip must have one [low, high] pair per action")
+    metadata = {
+        "deploy_metadata_version": DEPLOY_METADATA_VERSION,
+        "joint_names": json.dumps(joint_names),
+        "action_scale": json.dumps(action_scale),
+        "action_offset": json.dumps(action_offset),
+        "action_clip": json.dumps(action_clip),
+        "joint_stiffness": json.dumps(joint_stiffness),
+        "joint_damping": json.dumps(joint_damping),
+        "sim_dt": repr(float(sim_dt)),
+        "decimation": str(int(decimation)),
+        "policy_rate_hz": repr(1.0 / (float(sim_dt) * int(decimation))),
+        "observation_names": json.dumps(observation_names),
+    }
+    if trained_commit:
+        metadata["trained_commit"] = trained_commit
+    return metadata
+
+
+def attach_deploy_metadata(onnx_path: str, metadata: dict[str, str]) -> None:
+    """Store ``metadata`` plus the graph's own input and output widths in the ONNX file's metadata_props.
+
+    The graph itself is untouched; runtimes that do not read metadata run the file unchanged.
+    """
+    import onnx
+
+    model = onnx.load(onnx_path)
+    dims = {
+        name: [d.dim_value for d in value.type.tensor_type.shape.dim]
+        for name, value in (("obs", model.graph.input[0]), ("actions", model.graph.output[0]))
+    }
+    entries = {**metadata, "obs_dim": str(dims["obs"][-1]), "action_dim": str(dims["actions"][-1])}
+    kept = [entry for entry in model.metadata_props if entry.key not in entries]
+    del model.metadata_props[:]
+    model.metadata_props.extend(kept)
+    for key, value in entries.items():
+        model.metadata_props.add(key=key, value=value)
+    onnx.save(model, onnx_path)
 
 
 def copy_run_yamls(run_dir: str, output_dir: str) -> list[str]:

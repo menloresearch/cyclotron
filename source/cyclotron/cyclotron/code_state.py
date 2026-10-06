@@ -395,6 +395,16 @@ def training_code(run_dir: str) -> str | None:
     return " or ".join(f"{_where(record)} (git/{record['file']})" for record in records) or None
 
 
+def training_commit(run_dir: str) -> str | None:
+    """The commit a run was trained with, or None when the run doesn't record one (or names several)."""
+    path = os.path.join(run_dir, "params", CODE_STATE_FILE)
+    if os.path.isfile(path):
+        with open(path) as f:
+            return ((yaml.safe_load(f) or {}).get("cyclotron") or {}).get("commit")
+    commits = {record["commit"] for record in read_git_records(run_dir)}
+    return commits.pop() if len(commits) == 1 else None
+
+
 def _check_out_hint(run_dir: str) -> str:
     trained = training_code(run_dir)
     if not trained:
