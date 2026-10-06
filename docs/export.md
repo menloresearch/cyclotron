@@ -21,6 +21,7 @@ The export is written to `exported/` next to the checkpoint (`--output
 | `policy.pt` | The same policy as TorchScript. |
 | `env.yaml`, `agent.yaml` | Unchanged copies of the run's `params/`: the task and training settings. |
 | `code_state.yaml` | The code the run was trained with, for runs whose training recorded one. |
+| `export.log` | Append-only history of every export written here: which checkpoint, when, and what it printed. |
 
 The ONNX graph is whatever rsl_rl's exporter produces for the actor class: a
 plain MLP is `obs -> actions`, an LSTM or GRU carries its state as extra

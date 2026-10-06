@@ -105,6 +105,7 @@ from cyclotron.onnx_export import (
     copy_run_yamls,
     deploy_metadata,
     existing_export_note,
+    export_log,
     max_onnx_difference,
 )
 
@@ -189,28 +190,29 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     checkpoint = cli_args.resolve_checkpoint(log_root_path, agent_cfg, args_cli)
     run_dir = os.path.dirname(checkpoint)
     output_dir = os.path.abspath(os.path.expanduser(args_cli.output or os.path.join(run_dir, "exported")))
+    log = export_log(output_dir, f"export of {checkpoint} with task {args_cli.task}")
     note = existing_export_note(run_dir, output_dir)
     if note:
-        print(f"[INFO] {note}")
+        log(f"[INFO] {note}")
 
     env = gym.make(args_cli.task, cfg=env_cfg)
     # Compared where train.py saves params/: after the environment is created, which resolves parts of the config.
     changes, level = describe_changes(
         run_dir, class_to_dict(env_cfg), class_to_dict(agent_cfg), CODE_CHANGE_CONSEQUENCE
     )
-    print(changes)
+    log(changes)
     if level == "error":
         env.close()
         sys.exit(1)
     if level == "warning" and args_cli.strict:
-        print("[ERROR] Stopped by --strict: the code changed since the run was trained (see above).")
+        log("[ERROR] Stopped by --strict: the code changed since the run was trained (see above).")
         env.close()
         sys.exit(1)
     if isinstance(env.unwrapped, DirectMARLEnv):
         env = multi_agent_to_single_agent(env)
     env = RslRlVecEnvWrapper(env, clip_actions=agent_cfg.clip_actions)
 
-    print(f"[INFO] Loading model checkpoint from: {checkpoint}")
+    log(f"[INFO] Loading model checkpoint from: {checkpoint}")
     if agent_cfg.class_name == "OnPolicyRunner":
         runner = OnPolicyRunner(env, agent_cfg.to_dict(), log_dir=None, device=agent_cfg.device)
     elif agent_cfg.class_name == "DistillationRunner":
@@ -222,7 +224,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             runner, handle_deprecated_rsl_rl_checkpoint(checkpoint, installed_version), agent_cfg.class_name, run_dir
         )
     except ValueError as error:
-        print(f"[ERROR] {error}")
+        log(f"[ERROR] {error}")
         env.close()
         sys.exit(1)
     policy = runner.get_inference_policy(device=env.unwrapped.device)
@@ -231,33 +233,33 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     runner.export_policy_to_jit(path=output_dir, filename="policy.pt")
     missing = copy_run_yamls(run_dir, output_dir)
     for name in missing:
-        print(f"[WARNING] {run_dir}/params/{name} not found; the viewer and --share need it next to policy.onnx.")
+        log(f"[WARNING] {run_dir}/params/{name} not found; the viewer and --share need it next to policy.onnx.")
 
     metadata = gather_deploy_metadata(env, policy, run_dir)
     if metadata is not None:
         attach_deploy_metadata(os.path.join(output_dir, "policy.onnx"), metadata)
-        print(f"[INFO] Attached deploy metadata to policy.onnx: {', '.join(metadata)}, obs_dim, action_dim.")
+        log(f"[INFO] Attached deploy metadata to policy.onnx: {', '.join(metadata)}, obs_dim, action_dim.")
 
     difference = None
     if policy.is_recurrent:
-        print("[INFO] Skipping the ONNX check: it does not support recurrent policies.")
+        log("[INFO] Skipping the ONNX check: it does not support recurrent policies.")
     else:
         difference = max_onnx_difference(policy, env.get_observations(), os.path.join(output_dir, "policy.onnx"))
     env.close()
 
-    print(f"[INFO] Exported {os.path.basename(checkpoint)} to: {output_dir}")
+    log(f"[INFO] Exported {os.path.basename(checkpoint)} to: {output_dir}")
     for name in ("policy.onnx", "policy.pt", *BUNDLE_YAMLS, *OPTIONAL_BUNDLE_YAMLS):
         if name not in missing and os.path.isfile(os.path.join(output_dir, name)):
-            print(f"  {name}")
+            log(f"  {name}")
     if level == "warning":
-        print("[WARNING] The code changed since this run was trained; see the warning before the export.")
+        log("[WARNING] The code changed since this run was trained; see the warning before the export.")
     if difference is not None:
         # Exit here rather than after simulation_app.close(): hydra_task_config drops main's return value. Isaac Sim
         # replaces sys.exit with a version that only takes an exit code, so the message is printed first.
         if difference > ONNX_TOLERANCE:
-            print(f"[ERROR] policy.onnx gives different actions than the checkpoint (max difference {difference:.2e}).")
+            log(f"[ERROR] policy.onnx gives different actions than the checkpoint (max difference {difference:.2e}).")
             sys.exit(1)
-        print(f"[INFO] Checked policy.onnx against the checkpoint: max action difference {difference:.1e}.")
+        log(f"[INFO] Checked policy.onnx against the checkpoint: max action difference {difference:.1e}.")
 
 
 if __name__ == "__main__":

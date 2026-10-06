@@ -15,6 +15,7 @@ from cyclotron.onnx_export import (
     copy_run_yamls,
     deploy_metadata,
     existing_export_note,
+    export_log,
     max_onnx_difference,
 )
 
@@ -187,3 +188,16 @@ def test_existing_export_note_names_a_checkpoint_newer_than_the_export(tmp_path)
 def test_existing_export_note_on_an_export_of_the_latest_checkpoint(tmp_path):
     run_dir, exported = make_run_with_export(tmp_path, exported_at=100, checkpoints={"model_50.pt": 90})
     assert existing_export_note(run_dir, exported) == "Overwriting the run's existing export."
+
+
+def test_export_log_appends_across_invocations_and_prints_messages(tmp_path, capsys):
+    exported = str(tmp_path / "exported")
+    log = export_log(exported, "export of model_50.pt with task T")
+    log("[INFO] first")
+    export_log(exported, "export of model_99.pt with task T")("[INFO] second")
+    lines = (tmp_path / "exported" / "export.log").read_text().splitlines()
+    assert lines[0].startswith("--- 20") and lines[0].endswith(" export of model_50.pt with task T")
+    assert lines[1] == "[INFO] first"
+    assert lines[2].startswith("--- 20") and lines[2].endswith(" export of model_99.pt with task T")
+    assert lines[3] == "[INFO] second" and len(lines) == 4
+    assert capsys.readouterr().out == "[INFO] first\n[INFO] second\n"

@@ -6,6 +6,7 @@ import json
 import os
 import re
 import shutil
+from datetime import datetime
 
 import numpy as np
 import torch
@@ -82,6 +83,28 @@ def attach_deploy_metadata(onnx_path: str, metadata: dict[str, str]) -> None:
     for key, value in entries.items():
         model.metadata_props.add(key=key, value=value)
     onnx.save(model, onnx_path)
+
+
+EXPORT_LOG = "export.log"
+
+
+def export_log(output_dir: str, header: str):
+    """Print and append an export's messages to ``export.log`` next to its artifacts; returns the log function.
+
+    The log is append-only, so overwritten exports leave their history behind: which checkpoint was exported when,
+    and everything that export printed. ``header`` opens the invocation's section in the file without being printed.
+    """
+    os.makedirs(output_dir, exist_ok=True)
+    path = os.path.join(output_dir, EXPORT_LOG)
+    with open(path, "a") as f:
+        f.write(f"--- {datetime.now().isoformat(timespec='seconds')} {header}\n")
+
+    def log(message: str) -> None:
+        print(message)
+        with open(path, "a") as f:
+            f.write(message + "\n")
+
+    return log
 
 
 def existing_export_note(run_dir: str, output_dir: str) -> str | None:
