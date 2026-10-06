@@ -127,7 +127,10 @@ def _per_joint(value, count: int) -> list[float]:
 def gather_deploy_metadata(env, policy, run_dir: str) -> dict[str, str] | None:
     """Resolve the deployment contract from the live environment, or None (with a message) if an action term
     is not a joint action and the contract cannot describe it."""
-    manager = env.unwrapped.action_manager
+    manager = getattr(env.unwrapped, "action_manager", None)
+    if manager is None:
+        print("[WARNING] The environment has no action manager (direct workflow); not attaching deploy metadata.")
+        return None
     joint_names, scale, offset, clip, stiffness, damping = [], [], [], [], [], []
     clipped = False
     for name in manager.active_terms:

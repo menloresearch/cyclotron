@@ -142,9 +142,10 @@ offset and clip that turn raw actions into position targets, the PD gains
 (`sim.dt` x `decimation`), the input and output widths, the ordered
 observation terms, and the commit the run was trained with. It is a
 handshake, not configuration: the runtime should verify its own settings
-against these values and refuse on mismatch, not configure itself from them;
-torque limits and the actuator model stay in `env.yaml` and in the runtime's
-own config. Runtimes that do not read metadata are unaffected.
+against these values and refuse on mismatch, not configure itself from them.
+[docs/export.md](docs/export.md) documents every key, the full export
+pipeline, and how to export an Isaac Lab run that was not trained with
+cyclotron.
 
 To watch the exported policy in the browser, pass the run folder to
 [`--view`](#view-a-policy).
