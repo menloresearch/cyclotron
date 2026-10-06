@@ -73,6 +73,7 @@ import gymnasium as gym
 import torch
 from rsl_rl.runners import DistillationRunner, OnPolicyRunner
 
+import isaaclab_tasks  # noqa: F401
 from isaaclab.envs import (
     DirectMARLEnv,
     DirectMARLEnvCfg,
@@ -82,13 +83,11 @@ from isaaclab.envs import (
 )
 from isaaclab.utils.dict import class_to_dict, print_dict
 from isaaclab.utils.io import dump_yaml
-
 from isaaclab_rl.rsl_rl import RslRlBaseRunnerCfg, RslRlVecEnvWrapper, handle_deprecated_rsl_rl_cfg
+from isaaclab_tasks.utils.hydra import hydra_task_config
 
-import isaaclab_tasks  # noqa: F401
 import cyclotron.tasks  # noqa: F401
 from cyclotron.code_state import record_code_state, write_code_state
-from isaaclab_tasks.utils.hydra import hydra_task_config
 
 logger = logging.getLogger(__name__)
 

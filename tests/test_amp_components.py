@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import numpy as np
 import torch
+from rsl_rl.models import MLPModel
+from rsl_rl.storage import RolloutStorage
 from tensordict import TensorDict
 
 from cyclotron.algorithms.amp_ppo import AMPPPO
 from cyclotron.algorithms.discriminator import AMPDiscriminator, AMPFeatureNormalizer
 from cyclotron.algorithms.replay_buffer import AMPReplayBuffer
-from rsl_rl.models import MLPModel
-from rsl_rl.storage import RolloutStorage
 
 
 def test_feature_normalizer_matches_baseline_numpy_equations():
@@ -23,9 +23,7 @@ def test_feature_normalizer_matches_baseline_numpy_equations():
     normalizer = AMPFeatureNormalizer(4)
 
     for batch in batches:
-        expected_normalized = np.clip(
-            (batch - expected_mean) / np.sqrt(expected_var + 1.0e-4), -10.0, 10.0
-        )
+        expected_normalized = np.clip((batch - expected_mean) / np.sqrt(expected_var + 1.0e-4), -10.0, 10.0)
         actual_normalized = normalizer(torch.from_numpy(batch)).numpy()
         np.testing.assert_allclose(actual_normalized, expected_normalized, rtol=1.0e-6, atol=1.0e-6)
 
@@ -162,9 +160,7 @@ def test_amp_ppo_clips_one_combined_actor_critic_gradient_norm():
         parameter.grad = torch.ones_like(parameter)
 
     original_norm = algorithm._clip_actor_critic_gradients()
-    clipped_norm = torch.linalg.vector_norm(
-        torch.cat([parameter.grad.flatten() for parameter in parameters])
-    )
+    clipped_norm = torch.linalg.vector_norm(torch.cat([parameter.grad.flatten() for parameter in parameters]))
 
     torch.testing.assert_close(original_norm, torch.tensor(3.0))
     assert clipped_norm <= algorithm.max_grad_norm + 1.0e-6

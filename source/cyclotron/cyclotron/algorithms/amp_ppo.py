@@ -9,12 +9,11 @@ from itertools import chain
 
 import torch
 import torch.nn as nn
-from tensordict import TensorDict
-
 from rsl_rl.algorithms import PPO
 from rsl_rl.env import VecEnv
 from rsl_rl.storage import RolloutStorage
 from rsl_rl.utils import resolve_callable
+from tensordict import TensorDict
 
 from .discriminator import AMPDiscriminator
 from .replay_buffer import AMPReplayBuffer

@@ -77,6 +77,7 @@ import gymnasium as gym
 import torch
 from rsl_rl.runners import DistillationRunner, OnPolicyRunner
 
+import isaaclab_tasks  # noqa: F401
 from isaaclab.envs import (
     DirectMARLEnv,
     DirectMARLEnvCfg,
@@ -85,7 +86,6 @@ from isaaclab.envs import (
     multi_agent_to_single_agent,
 )
 from isaaclab.utils.dict import class_to_dict, print_dict
-
 from isaaclab_rl.rsl_rl import (
     RslRlBaseRunnerCfg,
     RslRlVecEnvWrapper,
@@ -93,11 +93,10 @@ from isaaclab_rl.rsl_rl import (
     handle_deprecated_rsl_rl_checkpoint,
 )
 from isaaclab_rl.utils.pretrained_checkpoint import get_published_pretrained_checkpoint
+from isaaclab_tasks.utils.hydra import hydra_task_config
 
-import isaaclab_tasks  # noqa: F401
 import cyclotron.tasks  # noqa: F401
 from cyclotron.code_state import describe_changes, load_policy
-from isaaclab_tasks.utils.hydra import hydra_task_config
 
 CODE_CHANGE_CONSEQUENCE = (
     "--play runs the checkpoint in an environment built from the current code, so it may behave differently than in"
