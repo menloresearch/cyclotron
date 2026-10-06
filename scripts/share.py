@@ -1,9 +1,11 @@
 """Upload a completed training run to the Hugging Face Hub.
 
-Uploads ``params/agent.yaml``, ``params/env.yaml``, ``params/code_state.yaml`` (for runs that have one) and
-``exported/policy.onnx`` from a run directory, together with a generated model card. If the run has no ONNX export
-yet, the latest checkpoint is exported first with ``export.py``. Requires a prior ``hf auth login`` (or
-``HF_TOKEN``).
+Uploads ``params/agent.yaml``, ``params/env.yaml``, ``params/code_state.yaml`` (for runs that have one) and the
+policy from a run directory, together with a generated model card. The checkpoint is always exported first with
+``export.py --strict``, so an ``exported/policy.onnx`` of unknown vintage is never published and export's own
+checks stop the upload: strict turns the code-changed-since-training warning into a stop, and a policy.onnx whose
+actions differ from the checkpoint is always one. ``--onnx`` uploads a given file as is instead. Requires a prior
+``hf auth login`` (or ``HF_TOKEN``).
 
 File paths from the training machine are reduced to file names in the uploaded yaml files; the run directory
 itself is not changed.
@@ -59,7 +61,7 @@ parser.add_argument(
     "--onnx",
     type=str,
     default=None,
-    help="Path to the ONNX policy. Defaults to <run_dir>/exported/policy.onnx, exported automatically if missing.",
+    help="Upload this ONNX file as is, instead of exporting the checkpoint.",
 )
 parser.add_argument(
     "--checkpoint",
@@ -67,7 +69,7 @@ parser.add_argument(
     default=None,
     help=(
         "Checkpoint to export and upload: a full path to a .pt file, or a filename inside run_dir."
-        " Defaults to the latest model_*.pt in the run if policy.onnx is missing."
+        " Defaults to the latest model_*.pt in the run."
     ),
 )
 parser.add_argument(
@@ -97,7 +99,8 @@ def resolve_checkpoint(run_dir: str, checkpoint: str) -> str:
 
 def export_onnx(checkpoint: str, task: str) -> None:
     print(f"[INFO] Exporting {checkpoint} to ONNX using task {task}")
-    command = [sys.executable, EXPORT_SCRIPT, "--task", task, "--checkpoint", checkpoint]
+    # Sharing publishes the policy, so --strict turns the code-changed warning --export alone prints into a stop.
+    command = [sys.executable, EXPORT_SCRIPT, "--task", task, "--checkpoint", checkpoint, "--strict"]
     if subprocess.run(command).returncode != 0:
         sys.exit("[ERROR] ONNX export failed.")
 
@@ -123,7 +126,7 @@ def main() -> None:
     else:
         print("[INFO] The run has no params/code_state.yaml (it was trained before training recorded one).")
 
-    needs_export = not onnx_path and (args_cli.checkpoint or not os.path.isfile(files["policy.onnx"]))
+    needs_export = not onnx_path
     if needs_export:
         if args_cli.checkpoint:
             checkpoint = resolve_checkpoint(run_dir, args_cli.checkpoint)
