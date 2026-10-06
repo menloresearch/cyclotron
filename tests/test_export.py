@@ -10,7 +10,13 @@ from rsl_rl.runners import OnPolicyRunner
 from tensordict import TensorDict
 
 from cyclotron.hub import infer_task
-from cyclotron.onnx_export import attach_deploy_metadata, copy_run_yamls, deploy_metadata, max_onnx_difference
+from cyclotron.onnx_export import (
+    attach_deploy_metadata,
+    copy_run_yamls,
+    deploy_metadata,
+    existing_export_note,
+    max_onnx_difference,
+)
 
 
 def make_run(
@@ -149,3 +155,35 @@ def test_deploy_metadata_rejects_mismatched_lengths():
         sample_metadata(action_scale=[0.25])
     with pytest.raises(ValueError, match="pair per action"):
         sample_metadata(action_clip=[[None, None]])
+
+
+def test_existing_export_note_is_silent_without_an_export(tmp_path):
+    run_dir = make_run(tmp_path)
+    assert existing_export_note(run_dir, os.path.join(run_dir, "exported")) is None
+
+
+def make_run_with_export(tmp_path, exported_at: int, checkpoints: dict[str, int]):
+    run_dir = make_run(tmp_path)
+    for name, written_at in checkpoints.items():
+        path = os.path.join(run_dir, name)
+        open(path, "w").close()
+        os.utime(path, (written_at, written_at))
+    exported = os.path.join(run_dir, "exported")
+    os.makedirs(exported)
+    onnx_path = os.path.join(exported, "policy.onnx")
+    open(onnx_path, "w").close()
+    os.utime(onnx_path, (exported_at, exported_at))
+    return run_dir, exported
+
+
+def test_existing_export_note_names_a_checkpoint_newer_than_the_export(tmp_path):
+    run_dir, exported = make_run_with_export(
+        tmp_path, exported_at=100, checkpoints={"model_50.pt": 90, "model_2500.pt": 300, "model_1000.pt": 200}
+    )
+    note = existing_export_note(run_dir, exported)
+    assert "model_2500.pt" in note and "latest" in note
+
+
+def test_existing_export_note_on_an_export_of_the_latest_checkpoint(tmp_path):
+    run_dir, exported = make_run_with_export(tmp_path, exported_at=100, checkpoints={"model_50.pt": 90})
+    assert existing_export_note(run_dir, exported) == "Overwriting the run's existing export."

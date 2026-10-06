@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 
 import numpy as np
@@ -81,6 +82,27 @@ def attach_deploy_metadata(onnx_path: str, metadata: dict[str, str]) -> None:
     for key, value in entries.items():
         model.metadata_props.add(key=key, value=value)
     onnx.save(model, onnx_path)
+
+
+def existing_export_note(run_dir: str, output_dir: str) -> str | None:
+    """What ``--export`` is about to overwrite, or None when the output folder has no policy.onnx yet.
+
+    Export writes its artifacts together, so the existing policy.onnx's file time is when that export was made;
+    checkpoints written after it mean the old export was not of the run's latest checkpoint.
+    """
+    existing = os.path.join(output_dir, "policy.onnx")
+    if not os.path.isfile(existing):
+        return None
+    exported_at = os.path.getmtime(existing)
+    newer = [
+        name
+        for name in os.listdir(run_dir)
+        if re.fullmatch(r"model_\d+\.pt", name) and os.path.getmtime(os.path.join(run_dir, name)) > exported_at
+    ]
+    if not newer:
+        return "Overwriting the run's existing export."
+    latest = max(newer, key=lambda name: int(name[len("model_") : -len(".pt")]))
+    return f"Overwriting an export made before {latest} was written, so it was not of the run's latest checkpoint."
 
 
 def copy_run_yamls(run_dir: str, output_dir: str) -> list[str]:

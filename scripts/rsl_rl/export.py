@@ -104,6 +104,7 @@ from cyclotron.onnx_export import (
     attach_deploy_metadata,
     copy_run_yamls,
     deploy_metadata,
+    existing_export_note,
     max_onnx_difference,
 )
 
@@ -188,6 +189,9 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     checkpoint = cli_args.resolve_checkpoint(log_root_path, agent_cfg, args_cli)
     run_dir = os.path.dirname(checkpoint)
     output_dir = os.path.abspath(os.path.expanduser(args_cli.output or os.path.join(run_dir, "exported")))
+    note = existing_export_note(run_dir, output_dir)
+    if note:
+        print(f"[INFO] {note}")
 
     env = gym.make(args_cli.task, cfg=env_cfg)
     # Compared where train.py saves params/: after the environment is created, which resolves parts of the config.
