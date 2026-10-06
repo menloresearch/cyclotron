@@ -209,8 +209,9 @@ On the first run this fetches the `third_party/humanoid-policy-viewer`
 submodule, its npm dependencies and the Asimov 1 robot model. It then
 downloads `policy.onnx`, `env.yaml` and `agent.yaml` to
 `~/.cache/humanoid-policy-viewer/hf/`, checks them, and opens the viewer with
-the policy selected. The gains, action scale, default pose and torque limits
-come from `env.yaml`. Use the sliders to command a velocity and push the robot.
+the policy selected. The policy's inputs, gains, action scale, default pose and
+torque limits come from `env.yaml`. Use the sliders to command a velocity and
+push the robot.
 
 A local path runs in place, with no download: a run folder (its `exported/`
 policy), any folder holding `policy.onnx` and `env.yaml`, or an `.onnx` file.
@@ -221,12 +222,28 @@ Options: `--revision <ref>` (branch, tag or commit), `--port <n>` (default
 3000) and `--no-open`. Private or gated repos need `HF_TOKEN` set.
 
 The viewer simulates with MuJoCo, not PhysX, so it doubles as a quick
-sim2sim check. It expects the policy interface of this repo's velocity tasks
-(78 observations at 50 Hz, 23 actions).
+sim2sim check. It builds the policy's input term by term from
+`observations.policy` in `env.yaml`, so a policy with other inputs, a stacked
+history or an rsl_rl LSTM or GRU runs as long as the viewer can compute every
+term. The output is fixed by the robot: 23 joint position targets at 50 Hz.
+The viewer refuses a policy it would run wrongly, naming the difference, and
+`--view` warns about it before the server starts:
 
-On a remote machine with no display, `--view` prints the URL instead of
-opening a browser. The server listens on localhost only, so forward its port
-over SSH and open `http://localhost:3000` on your own machine:
+- an observation term the viewer can't compute, such as base linear velocity,
+  foot contacts or a height scan, or a term with `clip` or `modifiers` set
+- a policy trained at another rate than 50 Hz (`sim.dt` x `decimation` in
+  `env.yaml`)
+- actions sent to the joints in another order, without `preserve_order` or
+  `use_default_offset`, or clipped
+
+The viewer's
+[supported policies](https://github.com/menloresearch/humanoid-policy-viewer/blob/main/docs/huggingface.md#supported-policies)
+list every term it can compute.
+
+On a remote machine with no display, `--view` prints a link instead of
+opening a browser; the link selects your policy. The server listens on
+localhost only, so forward its port over SSH and open the printed link on your
+own machine:
 
 ```bash
 ssh -L 3000:localhost:3000 <remote>
