@@ -36,6 +36,27 @@ If you already have your own Isaac Lab checkout you want
 to reuse, want conda instead of uv, or just want to understand what each
 install step does: **[Advanced Install](INSTALL.md)**.
 
+## How to use Cyclotron
+
+Cyclotron takes a policy from simulation to the robot in five stages, one
+command each. Each doc covers a quick start, every option, and advanced
+examples.
+
+- **[Train](docs/train.md)** — `--train` trains a locomotion policy in Isaac
+  Lab, for anyone producing a new policy from the stock tasks or from
+  [a task of their own](docs/designing-your-own-task.md).
+- **[Play](docs/play.md)** — `--play` runs a checkpoint live in Isaac Sim to
+  watch and evaluate its behavior, for whoever trained it, during and after
+  training.
+- **[Export](docs/export.md)** — `--export` turns a checkpoint into a verified
+  `policy.onnx` bundle for the robot and the viewer, for anyone deploying or
+  publishing a trained run.
+- **[Share](docs/share.md)** — `--share` uploads a run to the Hugging Face Hub
+  with a model card, for policies that are ready to hand to others.
+- **[View](docs/view.md)** — `--view` runs an exported or shared policy in the
+  browser with MuJoCo, no GPU and no Isaac Sim, for anyone who wants to try a
+  policy — including people without a training machine.
+
 ## Train
 
 Before starting a training run, run a quick test to ensure the full pipeline is functional. The following code will fire off a short training run with a small number of environments which should take ~10 minutes on a 4090.
@@ -197,9 +218,12 @@ Share a finished run on the Hugging Face Hub. Log in first with
 
 This uploads `agent.yaml`, `env.yaml`, `policy.onnx`, `code_state.yaml` (for
 runs that have one) and a generated `README.md` model card (BSD-3-Clause, `library_name: asimov`,
-`pipeline_tag: robotics`). If the run has no `exported/policy.onnx` yet, the
-latest checkpoint is exported automatically with `--export`; use `--checkpoint` to share a
-different one (a full path, or a filename inside the run directory). Use `--title "<text>"` to set the card's title,
+`pipeline_tag: robotics`). Sharing publishes the policy, so the checkpoint is
+always re-exported first with [`--export`](docs/export.md)'s `--strict` checks:
+a code change since training stops the upload instead of warning, and an
+`exported/policy.onnx` already on disk is never uploaded (pass `--onnx <file>`
+to upload a file as is). Use `--checkpoint` to share a
+different checkpoint (a full path, or a filename inside the run directory). Use `--title "<text>"` to set the card's title,
 `--summary "<text>"` to add a paragraph describing your training method,
 `--private` to create a private repo, and `--dry-run` to preview the card
 without uploading.

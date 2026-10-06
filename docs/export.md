@@ -1,14 +1,20 @@
 # Exporting policies to ONNX
 
 `./cyclotron.sh --export` turns a training checkpoint into a folder that can be
-run in the [policy viewer](../README.md#view-a-policy), shared on the Hugging
-Face Hub with [`--share`](../README.md#share-your-policy), or deployed on the
+run in the [policy viewer](view.md), shared on the Hugging
+Face Hub with [`--share`](share.md), or deployed on the
 robot:
+
+## Quick start
 
 ```bash
 ./cyclotron.sh --export \
     --checkpoint logs/rsl_rl/<experiment_name>/<run>/model_<n>.pt
 ```
+
+One command is enough for a run trained here: the task is read from the run's
+`agent.yaml`. The export lands in `exported/` next to the checkpoint; watch it
+with [`--view`](view.md) or publish it with [`--share`](share.md).
 
 ## What an export contains
 
@@ -51,6 +57,18 @@ head are baked into the graph.
    differs by more than 1e-4, which would mean a broken export, for example a
    dropped observation normalizer. Recurrent policies skip this check.
 
+## Options
+
+| Flag | Meaning |
+| --- | --- |
+| `--task` | Task used to build the policy. Inferred from the run's `agent.yaml` when `--checkpoint` is a full path, or from `--experiment_name`. |
+| `--checkpoint` | Checkpoint to export: a full path to a `.pt` file, or a filename inside the `--load_run` folder. |
+| `--load_run` | Run folder to export from. Defaults to the latest. |
+| `--experiment_name` | Experiment folder under `logs/rsl_rl/`. Defaults to the task's. |
+| `--output` | Folder to write to. Defaults to `<checkpoint folder>/exported`. |
+| `--strict` | Stop, instead of warning, if the code changed since the run was trained. |
+| `--device` | Device to run the export on (an AppLauncher flag; the export always runs headless). |
+
 ## Deploy metadata
 
 `policy.onnx` carries a small deployment contract in the ONNX file's
@@ -84,7 +102,7 @@ actions; for anything else (direct-workflow envs, non-joint action terms)
 `--export` prints a warning and writes the file without metadata rather than
 writing a wrong contract.
 
-## Exporting a model that was not trained with cyclotron
+## Advanced: exporting a model that was not trained with cyclotron
 
 `--export` works for any Isaac Lab run trained with rsl_rl, not only this
 repo's tasks. It needs three things:
@@ -122,7 +140,7 @@ What to expect with a foreign run:
   joint actions, Anymal and friends included; `trained_commit` is only
   present when the run recorded a single commit.
 - The export check (ONNX vs checkpoint) runs the same way as for local runs.
-- [`--view`](../README.md#view-a-policy) is Asimov-specific: the viewer
+- [`--view`](view.md) is Asimov-specific: the viewer
   simulates the Asimov 1 robot, so a policy for another robot exports fine
   but cannot be watched there. Use the robot's own tooling, or Isaac Lab's
   `play.py`, to see it move.
