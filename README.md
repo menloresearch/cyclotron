@@ -39,23 +39,35 @@ install step does: **[Advanced Install](INSTALL.md)**.
 ## How to use Cyclotron
 
 Cyclotron takes a policy from simulation to the robot in five stages, one
-command each. Each doc covers a quick start, every option, and advanced
-examples.
+command each. Each stage name links to its quick start below; each
+[docs] link to the full page with every option and advanced examples.
 
-- **[Train](docs/train.md)** — `--train` trains a locomotion policy in Isaac
-  Lab, for anyone producing a new policy from the stock tasks or from
-  [a task of their own](docs/designing-your-own-task.md).
-- **[Play](docs/play.md)** — `--play` runs a checkpoint live in Isaac Sim to
-  watch and evaluate its behavior, for whoever trained it, during and after
-  training.
-- **[Export](docs/export.md)** — `--export` turns a checkpoint into a verified
-  `policy.onnx` bundle for the robot and the viewer, for anyone deploying or
-  publishing a trained run.
-- **[Share](docs/share.md)** — `--share` uploads a run to the Hugging Face Hub
-  with a model card, for policies that are ready to hand to others.
-- **[View](docs/view.md)** — `--view` runs an exported or shared policy in the
-  browser with MuJoCo, no GPU and no Isaac Sim, for anyone who wants to try a
-  policy — including people without a training machine.
+- **[Train](#train)** [[docs](docs/train.md)] — `--train` trains a locomotion
+  policy in Isaac Lab, for anyone producing a new policy from the stock tasks
+  or from [a task of their own](docs/designing-your-own-task.md).
+- **[Play](#play--evaluate)** [[docs](docs/play.md)] — `--play` runs a
+  checkpoint live in Isaac Sim to watch and evaluate its behavior, for
+  whoever trained it, during and after training.
+- **[Export](#export-a-policy)** [[docs](docs/export.md)] — `--export` turns a
+  checkpoint into a verified `policy.onnx` bundle for the robot and the
+  viewer, for anyone deploying or publishing a trained run.
+- **[Share](#share-your-policy)** [[docs](docs/share.md)] — `--share` uploads a
+  run to the Hugging Face Hub with a model card, for policies that are ready
+  to hand to others.
+- **[View](#view-a-policy)** [[docs](docs/view.md)] — `--view` runs an exported
+  or shared policy in the browser with MuJoCo, no GPU and no Isaac Sim, for
+  anyone who wants to try a policy — including people without a training
+  machine.
+
+```mermaid
+flowchart LR
+    Train -->|checkpoint| Play
+    Play -->|adjust, retrain| Train
+    Train -->|checkpoint| Export
+    Export -->|exported/ folder| View
+    Export --> Share
+    Share -->|Hugging Face repo| View
+```
 
 ## Train
 
@@ -96,6 +108,9 @@ latest checkpoint, at the start and again when training ends or is
 interrupted. Resuming starts a new run directory initialised from that checkpoint.
 
 Note: We use 4096 `num_envs` to train our baseline locomotion policy using A6000 or pro 6000. If you hit any out of memory errors, consider lowering the `num_envs`. However, this means that the policy may take longer to converge or may be less stable for the same number of iterations.
+
+The stock tasks are the starting point: to train something of your own, see
+[Designing your own task](docs/designing-your-own-task.md).
 
 #### Multi-GPU Training Run
 
