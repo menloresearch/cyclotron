@@ -24,7 +24,7 @@ import yaml
 CODE_STATE_FILE = "code_state.yaml"
 PACKAGES = ("isaacsim", "isaaclab", "rsl-rl-lib", "torch")
 # Package files that export, share and these checks use, but training doesn't; editing them changes no policy.
-NOT_TRAINING_CODE = frozenset({"code_state.py", "hub.py", "onnx_export.py"})
+NOT_TRAINING_CODE = frozenset({"code_state.py", "hub.py", "onnx_export.py", "run_config.py"})
 
 # -- Recording the code at training time ------------------------------------------------------------------------
 
@@ -405,7 +405,7 @@ def training_commit(run_dir: str) -> str | None:
     return commits.pop() if len(commits) == 1 else None
 
 
-def _check_out_hint(run_dir: str) -> str:
+def check_out_hint(run_dir: str) -> str:
     trained = training_code(run_dir)
     if not trained:
         return "Train a new run, or check out the code the run was trained with (the run doesn't record its commit)."
@@ -416,9 +416,8 @@ def _check_out_hint(run_dir: str) -> str:
 
 
 def describe_changes(run_dir: str, env_cfg: dict, agent_cfg: dict, consequence: str) -> tuple[str, str]:
-    """Compare a run with the current code. Returns the message to print and its level: ``"ok"``, ``"warning"``
-    when only code changed (or the run can't be checked), ``"settings"`` when the policy settings (what the policy
-    sees and does) changed too, or ``"error"`` when the policy's network changed in a way its weights can't show.
+    """Compare a run with the current code. Returns the message to print and its level: ``"ok"``, ``"warning"``,
+    or ``"error"`` when the policy's network changed in a way its weights can't show.
 
     ``env_cfg`` and ``agent_cfg`` are the current configs as plain dicts (Isaac Lab's ``class_to_dict``), taken where
     training saves them: after the environment is created.
@@ -449,10 +448,10 @@ def describe_changes(run_dir: str, env_cfg: dict, agent_cfg: dict, consequence: 
     if code:
         lines += ["  Code:"] + [f"    {line}" for line in code]
     if errors:
-        lines.append(f"  {_check_out_hint(run_dir)}")
+        lines.append(f"  {check_out_hint(run_dir)}")
     else:
         lines.append(f"  {consequence}")
-    return "\n".join(lines), "error" if errors else "settings" if settings else "warning"
+    return "\n".join(lines), "error" if errors else "warning"
 
 
 # -- Loading only the policy -----------------------------------------------------------------------------------
@@ -514,6 +513,6 @@ def load_policy(runner, checkpoint: str, runner_class: str, run_dir: str) -> Non
             "The checkpoint's policy doesn't fit the network the current code builds:\n"
             + "\n".join(f"  {line}" for line in errors)
             + "\nThe policy's inputs or network changed since training; see the warning above.\n"
-            + _check_out_hint(run_dir)
+            + check_out_hint(run_dir)
         )
     runner.load(checkpoint, load_cfg=inference_load_cfg(runner_class))

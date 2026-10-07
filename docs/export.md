@@ -40,24 +40,35 @@ head are baked into the graph.
    for runs trained here: the task is read from the run's `agent.yaml`.
    Otherwise pass `--task`, and pick the checkpoint like `--play` does
    (`--load_run`, `--experiment_name`, or the latest run by default).
-2. **Checks the run against the current code.** Before loading anything it
-   compares the run's saved `env.yaml`, `agent.yaml` and `code_state.yaml`
-   with the code you have checked out and prints what changed; see
+2. **Rebuilds the run's policy settings.** Like a restart of the run, it sets
+   what the policy sees and does back to the values in the run's `env.yaml` and
+   `agent.yaml` before building the environment: the actor's observation terms
+   (functions, scales, clipping, history), the actions, the robot's default
+   pose and actuators, `sim.dt`, decimation and the actor network (an LSTM run
+   exports as an LSTM even if the task now trains an MLP). The policy and its
+   deploy metadata therefore describe the run as it was trained, whatever the
+   task's config says today. Hydra overrides on the command line apply on top,
+   e.g. `env.actions.joint_pos.scale=0.3` to deploy another scale on purpose.
+   Everything else (rewards, terrain, events, commands, the robot model file)
+   stays as the code has it: it only shapes training, or depends on the
+   machine. If the current code can't take a saved setting (an observation
+   term or actuator group it no longer has, or a function it can't find), the
+   export stops and names it.
+3. **Checks the run against the current code.** It compares the run's saved
+   `env.yaml`, `agent.yaml` and `code_state.yaml` with the code you have
+   checked out and prints what changed; see
    [Code changes since training](../README.md#code-changes-since-training).
-   Code-only changes are warnings (`--strict` turns them into a stop). A
-   changed policy setting (what the policy sees and does) stops the export,
-   because the deploy metadata is read from the current code and would
-   describe the new settings instead of the trained ones: pass the trained
-   values back as overrides, check out the trained commit, or add
-   `--allow_changed_settings` to export anyway. A policy network whose loaded
-   weights would compute something else is always a stop.
-3. **Loads only the actor.** The critic, the AMP discriminator and the
+   With the settings rebuilt, what is left is mostly code: the functions behind
+   the settings and the robot model are the current ones. Changes are warnings
+   (`--strict` turns them into a stop); a policy network whose loaded weights
+   would compute something else is always a stop.
+4. **Loads only the actor.** The critic, the AMP discriminator and the
    optimizer are training-only state, so a run whose critic no longer matches
    the current code still exports.
-4. **Exports and bundles.** Writes `policy.onnx` and `policy.pt` with rsl_rl's
+5. **Exports and bundles.** Writes `policy.onnx` and `policy.pt` with rsl_rl's
    exporter and copies the run's yaml files next to them.
-5. **Attaches the deploy metadata** described below to `policy.onnx`.
-6. **Checks the export.** Feeds the same observations to the checkpoint and to
+6. **Attaches the deploy metadata** described below to `policy.onnx`.
+7. **Checks the export.** Feeds the same observations to the checkpoint and to
    `policy.onnx` (as attached, through onnxruntime) and fails if any action
    differs by more than 1e-4, which would mean a broken export, for example a
    dropped observation normalizer. Recurrent policies skip this check.
@@ -72,8 +83,8 @@ head are baked into the graph.
 | `--experiment_name` | Experiment folder under `logs/rsl_rl/`. Defaults to the task's. |
 | `--output` | Folder to write to. Defaults to `<checkpoint folder>/exported`. |
 | `--strict` | Stop, instead of warning, if the code changed since the run was trained. |
-| `--allow_changed_settings` | Export even if a policy setting changed since the run was trained. The deploy metadata then describes the current settings, not the trained ones. Can't be combined with `--strict`. |
 | `--device` | Device to run the export on (an AppLauncher flag; the export always runs headless). |
+| `env.<path>=<value>`, `agent.<path>=<value>` | Hydra overrides, applied on top of the run's saved settings. The change since training is printed, and the deploy metadata describes the overridden value. |
 
 ## Deploy metadata
 
@@ -94,9 +105,9 @@ that read no metadata run the file unchanged, since the graph is untouched.
 | `deploy_metadata_version` | `"1"` | Schema version. Refuse versions you do not know. |
 | `obs_dim`, `action_dim` | int | Width of the graph's `obs` input and `actions` output, read from the graph itself. |
 | `joint_names` | JSON list of `action_dim` strings | The joint each action drives, in action order. The single most safety-critical check: a joint-order mismatch silently scrambles the robot. |
-| `action_scale`, `action_offset` | JSON lists of `action_dim` floats | The affine that turns a raw action into a position target: `target = action * scale + offset`. The offset is the robot's configured default pose (`init_state.joint_pos`) for tasks that use `use_default_offset`, without the per-environment jitter that `randomize_joint_default_pos` adds during training. |
+| `action_scale`, `action_offset` | JSON lists of `action_dim` floats | The affine that turns a raw action into a position target: `target = action * scale + offset`. The offset is the run's default pose (`init_state.joint_pos` in its `env.yaml`) for tasks that use `use_default_offset`, without the per-environment jitter that `randomize_joint_default_pos` adds during training. |
 | `action_clip` | JSON: `null`, or `action_dim` pairs `[low, high]` (`null` for an unclipped side) | Clip applied to the targets after the affine. |
-| `joint_stiffness`, `joint_damping` | JSON lists of `action_dim` floats | The PD gains (kp/kd) the targets were trained to be tracked with, from the task's configured actuators (not the simulated values, which randomization events can perturb). |
+| `joint_stiffness`, `joint_damping` | JSON lists of `action_dim` floats | The PD gains (kp/kd) the targets were trained to be tracked with, from the run's configured actuators (not the simulated values, which randomization events can perturb). |
 | `sim_dt`, `decimation`, `policy_rate_hz` | float, int, float | The policy step: it was trained to act every `sim_dt x decimation` seconds. |
 | `observation_names` | JSON list of strings | The policy's input terms in order, as named in `env.yaml` (`<group>/<term>` when the actor reads several groups). The per-term recipe stays in `env.yaml`. |
 | `trained_commit` | string, absent when unknown | The commit the run was trained with, from `code_state.yaml` (or the run's `git/` records), for traceability. |
@@ -146,8 +157,8 @@ repo's tasks. It needs three things:
 
 1. **The run directory layout Isaac Lab writes**: the checkpoint
    (`model_<n>.pt`) with `params/agent.yaml` and `params/env.yaml` next to it
-   (Isaac Lab's `train.py` writes these). The yaml copies and the
-   code-change check come from there.
+   (Isaac Lab's `train.py` writes these). The policy settings, the yaml
+   copies and the code-change check come from there.
 2. **The task, passed explicitly**: task inference only knows this repo's
    experiments, so pass the gym id the run was trained with, e.g.
 
@@ -172,9 +183,11 @@ What to expect with a foreign run:
 - The code-change check cannot find `params/code_state.yaml` and falls back
   to the `git/*.diff` records rsl_rl wrote. Commits from another repository
   are not in this clone, so it reports that changes "can't be listed" — a
-  warning, and the export proceeds (`--strict` would stop on it). Policy
-  settings are still compared with the run's `env.yaml`, so a changed setting
-  stops the export as for local runs.
+  warning, and the export proceeds (`--strict` would stop on it).
+- The policy settings are rebuilt from the run's `env.yaml` and `agent.yaml`
+  as for local runs. A function the run used from a package that isn't
+  installed here, and that this checkout has under no other module, stops the
+  export.
 - The deploy metadata is attached as long as the task is manager-based with
   joint actions, Anymal and friends included; `trained_commit` is only
   present when the run recorded a single commit.

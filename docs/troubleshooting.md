@@ -43,21 +43,22 @@ Not a malfunction: the checkout differs from the code that trained the run,
 and strict mode (`--share` always, `--export`/`--play` with `--strict`)
 refuses to continue. The message above the stop names each difference, and
 `code_state.yaml` names the trained commit. Check that commit out (a separate
-worktree works well) and re-run, pass the trained values back as overrides,
-or decide the changes are harmless and export without `--strict`. Background
-in [Code changes since training](../README.md#code-changes-since-training).
+worktree works well) and re-run, or decide the changes are harmless and run
+without `--strict`. For `--play`, changed policy settings can also be passed
+back as overrides; `--export` restores them itself. Background in
+[Code changes since training](../README.md#code-changes-since-training).
 
-### "Stopped: the policy settings changed since the run was trained"
+### "The current code can't rebuild the policy settings this run was trained with"
 
-`--export` stops on its own, without `--strict`, when a policy setting (an
-observation, the action scale, the default pose, actuator gains, `sim.dt`,
-decimation) differs from the run's `env.yaml`. The deploy metadata in
-`policy.onnx` is read from the current code, so it would tell the robot to
-use the new settings with weights trained on the old ones. The message above
-the stop lists each setting by its override path: pass the trained values back
-on the command line, or check out the trained commit. If the new settings are
-what you mean to deploy, add `--allow_changed_settings`; the export then ends
-with a reminder that the metadata describes the current settings.
+`--export` sets the policy settings back to the run's saved `env.yaml` and
+`agent.yaml` before building the environment, and the current code has no
+place for some of them: an observation term, actuator group or config field
+it no longer has, or a function it can't import under the saved name or any
+other module. The lines under the error name each one. Check out the commit
+the stop names (a separate worktree works well) and export from there, or add
+back what was removed. A function that only moved to another module, for
+example from the package's old name `isaac_asimov`, is found under its new
+module and doesn't stop the export.
 
 ### "policy.onnx gives different actions than the checkpoint"
 

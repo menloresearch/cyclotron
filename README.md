@@ -188,9 +188,13 @@ To watch the exported policy in the browser, pass the run folder to
 
 ## Code changes since training
 
-`--export` and `--play` rebuild the policy from the code you have checked out
-now, so a run trained with different code can load wrongly or behave
-differently. Training therefore writes `params/code_state.yaml` next to
+`--play` rebuilds the policy from the code you have checked out now, so a run
+trained with different code can load wrongly or behave differently. `--export`
+first sets the policy settings back to the ones the run saved in `env.yaml` and
+`agent.yaml`, like a restart of the run (see
+[What `--export` does](docs/export.md#what---export-does)), but the code behind
+them, such as the observation functions and the robot model, is still the
+current one. Training therefore writes `params/code_state.yaml` next to
 `env.yaml` and `agent.yaml`: the git commit and branch, a hash of every
 training-code file in the cyclotron package, the Isaac Lab commit, a hash of
 the robot model, and the `isaacsim`, `isaaclab`, `rsl-rl-lib` and `torch`
@@ -204,7 +208,9 @@ code and print what changed:
   the actions, the robot's default pose and actuators, the control rate and
   the actor network. Each difference is named by its Hydra override path, for
   example `env.observations.policy.base_ang_vel.scale: 0.25 -> 0.5`, so you can
-  pass the trained value back on the command line. Critic and AMP inputs,
+  pass the trained value back to `--play` on the command line (`--export` does
+  this itself, so there it only lists what it couldn't restore and your own
+  overrides). Critic and AMP inputs,
   rewards, events, terrain, command ranges and observation noise are not
   compared: they only shape training, and the play tasks change some of them.
 - **Code**: cyclotron files that changed, and changes to Isaac Lab, the robot
@@ -212,9 +218,7 @@ code and print what changed:
   are compared with the commits rsl_rl logged in the run's `git/` folder.
 
 These are warnings, since experiments change code on purpose; add `--strict` to
-stop instead. `--export` also stops on a changed policy setting, because the
-deploy metadata it writes would describe the new setting rather than the
-trained one; `--allow_changed_settings` exports anyway. Two cases always stop. One is a checkpoint whose policy no longer
+stop instead. Two cases always stop. One is a checkpoint whose policy no longer
 fits the network the current code builds, for example because an observation
 term was added and the input size changed. The other is a changed actor class
 or activation, which would load the old weights but compute something else.

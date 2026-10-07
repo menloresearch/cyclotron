@@ -316,7 +316,7 @@ def test_describe_changes_is_quiet_when_nothing_changed_and_warns_otherwise(tmp_
         "ok",
     )
 
-    # Only the code changed: a warning, which export lets through.
+    # Only the code changed.
     state = record_code_state(make_env())
     state["cyclotron"]["files"]["removed_since.py"] = "0" * 64
     write_code_state(str(params), state)
@@ -324,11 +324,10 @@ def test_describe_changes_is_quiet_when_nothing_changed_and_warns_otherwise(tmp_
     assert level == "warning" and "  Code:" in message and "Policy settings" not in message
     write_code_state(str(params), record_code_state(make_env()))
 
-    # A policy setting changed: export stops on this level unless --allow_changed_settings is given.
     env, agent = make_env(), make_agent()
     env["actions"]["joint_pos"]["scale"] = 0.5
     message, level = describe_changes(str(tmp_path), env, agent, "Behaviour may differ.")
-    assert level == "settings"
+    assert level == "warning"
     assert message.splitlines() == [
         "[WARNING] The code has changed since this run was trained.",
         "  Policy settings (what the policy sees and does):",
