@@ -6,6 +6,7 @@ import json
 import os
 import re
 import shutil
+from contextlib import contextmanager
 from datetime import datetime
 
 import numpy as np
@@ -19,6 +20,9 @@ OPTIONAL_BUNDLE_YAMLS = ("code_state.yaml",)
 
 # Schema of the deploy metadata attached to policy.onnx; firmware should refuse versions it does not know.
 DEPLOY_METADATA_VERSION = "1"
+
+# Steps the export check runs a recurrent policy for, from an empty memory: enough to use the memory it carries.
+RECURRENT_STEPS = 3
 
 
 def deploy_metadata(
@@ -146,6 +150,18 @@ def copy_run_yamls(run_dir: str, output_dir: str) -> list[str]:
     return missing
 
 
+@contextmanager
+def _full_float32():
+    """Run PyTorch in full float32, like onnxruntime. GPUs since Ampere let cuDNN run an LSTM in TF32 by default,
+    which drifts ~1e-3 from float32 within a few steps without the exported file being wrong."""
+    saved = torch.backends.cudnn.allow_tf32, torch.backends.cuda.matmul.allow_tf32
+    torch.backends.cudnn.allow_tf32 = torch.backends.cuda.matmul.allow_tf32 = False
+    try:
+        yield
+    finally:
+        torch.backends.cudnn.allow_tf32, torch.backends.cuda.matmul.allow_tf32 = saved
+
+
 def max_onnx_difference(
     policy: torch.nn.Module, obs: TensorDict, onnx_path: str, num_samples: int = 64, seed: int = 0
 ) -> float:
@@ -154,6 +170,12 @@ def max_onnx_difference(
 
     The first observation is used as is, and ``num_samples - 1`` noisy copies of it widen the check beyond a
     single input. A large difference means the export is wrong, e.g. it dropped the observation normalizer.
+
+    A recurrent policy (an LSTM or GRU) is checked over ``RECURRENT_STEPS`` steps from an empty memory, the way a
+    robot starts: the PyTorch policy's memory is cleared, the ONNX file gets zeros as ``h_in`` (and ``c_in``), and
+    the memory it returns (``h_out``, ``c_out``) is fed back in, as a runtime does. The returned memory is compared
+    too. The first step alone would not do: from an empty memory, the weights that carry memory between steps
+    multiply zeros.
     """
     import onnxruntime as ort
 
@@ -167,11 +189,32 @@ def max_onnx_difference(
     sizes = [first[group].shape[-1] for group in groups]
     device = next(policy.parameters()).device
     batch = TensorDict(dict(zip(groups, samples.split(sizes, dim=-1))), batch_size=[num_samples]).to(device)
-    with torch.inference_mode():
-        expected = policy(batch).cpu().numpy()
-
-    # The exported graph has a fixed batch size of 1, so run the samples one at a time.
+    # The exported graph has a fixed batch size of 1, so the ONNX file runs the samples one at a time. A recurrent
+    # graph's inputs after obs are its memory, matching its outputs after the actions in order.
     session = ort.InferenceSession(onnx_path, providers=["CPUExecutionProvider"])
-    input_name = session.get_inputs()[0].name
-    actual = [session.run(None, {input_name: sample[None].numpy()})[0][0] for sample in samples]
-    return float(np.abs(expected - np.stack(actual)).max())
+    obs_input, *memory_inputs = session.get_inputs()
+    empty = {i.name: np.zeros([d if isinstance(d, int) else 1 for d in i.shape], np.float32) for i in memory_inputs}
+    memories = [empty] * num_samples
+
+    recurrent = policy.is_recurrent
+    if recurrent:
+        policy.reset()
+    difference = 0.0
+    for _ in range(RECURRENT_STEPS if recurrent else 1):
+        with torch.inference_mode(), _full_float32():
+            expected = [policy(batch).cpu().numpy()]
+            if recurrent:
+                memory = policy.get_hidden_state()
+                # (layers, samples, size) per state: the hidden state, and the cell state of an LSTM.
+                expected += [state.cpu().numpy() for state in (memory if isinstance(memory, tuple) else (memory,))]
+        outputs = [
+            session.run(None, {obs_input.name: sample[None].numpy(), **memories[i]}) for i, sample in enumerate(samples)
+        ]
+        difference = max(difference, np.abs(expected[0] - np.stack([out[0][0] for out in outputs])).max())
+        for index, state in enumerate(expected[1:], start=1):
+            actual = np.stack([out[index][:, 0] for out in outputs], axis=1)
+            difference = max(difference, np.abs(state - actual).max())
+        memories = [{i.name: out[1 + n] for n, i in enumerate(memory_inputs)} for out in outputs]
+    if recurrent:
+        policy.reset()
+    return float(difference)

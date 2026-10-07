@@ -109,6 +109,7 @@ from cyclotron.code_state import (
 from cyclotron.onnx_export import (
     BUNDLE_YAMLS,
     OPTIONAL_BUNDLE_YAMLS,
+    RECURRENT_STEPS,
     attach_deploy_metadata,
     copy_run_yamls,
     deploy_metadata,
@@ -253,7 +254,11 @@ def main():
     not_saved = missing_run_configs(run_dir)
     if not_saved:
         if args_cli.strict:
-            log(f"[ERROR] Stopped by --strict: {run_dir}/params has no {' and '.join(not_saved)}.")
+            log(
+                f"[ERROR] Stopped by --strict: {run_dir}/params has no {' and '.join(not_saved)}, so the settings this"
+                " run was trained with are unknown. Without --strict, --export asks whether to write it from the"
+                " current code."
+            )
             sys.exit(1)
         if not ask_to_generate(run_dir, not_saved, log):
             log(
@@ -268,7 +273,7 @@ def main():
             " training."
         )
         if args_cli.strict:
-            log(f"[ERROR] Stopped by --strict: {message}")
+            log(f"[ERROR] Stopped by --strict: {message} --strict only exports the settings a run was trained with.")
             sys.exit(1)
         log(f"[WARNING] {message}")
 
@@ -305,11 +310,13 @@ def main():
         sys.exit(1)
     log("[INFO] Checked the rebuilt policy settings against the run's env.yaml and agent.yaml: they match.")
     if new:
-        log(
-            "[WARNING] The current code has policy settings the run didn't save; they keep the current code's" " value:"
-        )
+        log("[WARNING] The current code has policy settings the run didn't save; they keep the current code's value:")
         for line in new:
             log(f"    {line}")
+        if args_cli.strict:
+            log("[ERROR] Stopped by --strict: these settings don't come from the run (see above).")
+            env.close()
+            sys.exit(1)
     code = code_differences(run_dir, record_code_state(normalize_config(env_dict)))
     if code:
         log("[WARNING] The code has changed since this run was trained:")
@@ -352,11 +359,8 @@ def main():
         attach_deploy_metadata(os.path.join(output_dir, "policy.onnx"), metadata)
         log(f"[INFO] Attached deploy metadata to policy.onnx: {', '.join(metadata)}, obs_dim, action_dim.")
 
-    difference = None
-    if policy.is_recurrent:
-        log("[INFO] Skipping the ONNX check: it does not support recurrent policies.")
-    else:
-        difference = max_onnx_difference(policy, env.get_observations(), os.path.join(output_dir, "policy.onnx"))
+    difference = max_onnx_difference(policy, env.get_observations(), os.path.join(output_dir, "policy.onnx"))
+    checked = f"actions and memory over {RECURRENT_STEPS} steps" if policy.is_recurrent else "actions"
     env.close()
 
     log(f"[INFO] Exported {os.path.basename(checkpoint)} to: {output_dir}")
@@ -367,12 +371,14 @@ def main():
         log(f"[WARNING] {' and '.join(not_saved or generated)} came from the current code, not from training.")
     if code or new:
         log("[WARNING] The code changed since this run was trained; see the warnings before the export.")
-    if difference is not None:
-        # Isaac Sim replaces sys.exit with a version that only takes an exit code, so the message is printed first.
-        if difference > ONNX_TOLERANCE:
-            log(f"[ERROR] policy.onnx gives different actions than the checkpoint (max difference {difference:.2e}).")
-            sys.exit(1)
-        log(f"[INFO] Checked policy.onnx against the checkpoint: max action difference {difference:.1e}.")
+    # Isaac Sim replaces sys.exit with a version that only takes an exit code, so the message is printed first.
+    if difference > ONNX_TOLERANCE:
+        log(
+            "[ERROR] policy.onnx gives different actions than the checkpoint"
+            f" (max difference {difference:.2e}; checked {checked})."
+        )
+        sys.exit(1)
+    log(f"[INFO] Checked policy.onnx against the checkpoint ({checked}): max difference {difference:.1e}.")
 
 
 if __name__ == "__main__":

@@ -4,8 +4,9 @@ Uploads ``params/agent.yaml``, ``params/env.yaml``, ``params/code_state.yaml`` (
 policy from a run directory, together with a generated model card. The checkpoint is always exported first with
 ``export.py --strict``, so an ``exported/policy.onnx`` of unknown vintage is never published and export's own
 checks stop the upload: strict turns the code-changed-since-training warning into a stop, and a policy.onnx whose
-actions differ from the checkpoint is always one. ``--onnx`` uploads a given file as is instead. Requires a prior
-``hf auth login`` (or ``HF_TOKEN``).
+actions differ from the checkpoint is always one. ``--onnx`` uploads a given file as is instead. A run whose
+``env.yaml`` or ``agent.yaml`` is missing, or was generated from the code by an earlier export, is never uploaded.
+Requires a prior ``hf auth login`` (or ``HF_TOKEN``).
 
 File paths from the training machine are reduced to file names in the uploaded yaml files; the run directory
 itself is not changed.
@@ -18,6 +19,7 @@ import subprocess
 import sys
 
 from cyclotron.hub import infer_task, strip_local_paths
+from cyclotron.run_config import generated_run_configs
 
 README_TEMPLATE = """---
 library_name: asimov
@@ -120,6 +122,12 @@ def main() -> None:
         missing.append(onnx_path)
     if missing:
         sys.exit("[ERROR] Missing files:\n  " + "\n  ".join(missing))
+    generated = generated_run_configs(run_dir)
+    if generated:
+        sys.exit(
+            f"[ERROR] {run_dir}/params/{' and '.join(generated)} was written from the code by an earlier --export,"
+            " not by training; --share only publishes the settings a run was trained with."
+        )
     code_state = os.path.join(run_dir, "params", "code_state.yaml")
     if os.path.isfile(code_state):
         files["code_state.yaml"] = code_state

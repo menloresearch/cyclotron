@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 import torch
-from rsl_rl.models import MLPModel
+from rsl_rl.models import MLPModel, RNNModel
 from rsl_rl.runners import OnPolicyRunner
 from tensordict import TensorDict
 
@@ -101,6 +101,45 @@ def test_onnx_without_the_normalizer_is_caught(tmp_path, trained):
     unnormalized.mlp.load_state_dict(policy.mlp.state_dict())
     unnormalized.distribution.load_state_dict(policy.distribution.state_dict())
     assert max_onnx_difference(policy, obs, export(unnormalized, tmp_path)) > 1e-2
+
+
+def make_recurrent_policy(obs: TensorDict, rnn_type: str) -> RNNModel:
+    obs_groups = {"actor": ["policy", "extra"], "critic": ["policy"]}
+    distribution = {"class_name": "GaussianDistribution", "init_std": 1.0}
+    torch.manual_seed(0)
+    policy = RNNModel(
+        obs,
+        obs_groups,
+        "actor",
+        4,
+        [16, 16],
+        obs_normalization=True,
+        distribution_cfg=distribution,
+        rnn_type=rnn_type,
+        rnn_hidden_dim=8,
+    )
+    policy.update_normalization(obs)
+    return policy.eval()
+
+
+@pytest.mark.parametrize("rnn_type", ["lstm", "gru"])
+def test_exported_recurrent_onnx_matches_policy_over_steps_from_an_empty_memory(tmp_path, trained, rnn_type):
+    _, obs = trained
+    policy = make_recurrent_policy(obs, rnn_type)
+    with torch.inference_mode():
+        policy(obs)  # memory left by earlier steps must not leak into the check
+    assert max_onnx_difference(policy, obs, export(policy, tmp_path)) < 1e-5
+    assert policy.get_hidden_state() is None  # and the check leaves the memory empty
+
+
+def test_recurrent_onnx_with_wrong_memory_weights_is_caught(tmp_path, trained):
+    _, obs = trained
+    policy = make_recurrent_policy(obs, "lstm")
+    broken = make_recurrent_policy(obs, "lstm")
+    with torch.no_grad():
+        # These weights multiply the memory, so a single step from an empty memory never uses them.
+        broken.rnn.rnn.weight_hh_l0.mul_(-1.0)
+    assert max_onnx_difference(policy, obs, export(broken, tmp_path)) > 1e-3
 
 
 def sample_metadata(**overrides):

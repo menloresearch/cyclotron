@@ -35,17 +35,19 @@ directory itself is not changed.
 
 ## What `--share` does
 
-1. **Re-exports the checkpoint.** The checkpoint is always exported first
+1. **Checks the run's settings files.** A run whose `env.yaml` or
+   `agent.yaml` is missing (`Missing files`), or was generated from the code
+   by an earlier export, is refused before anything runs, also with
+   `--onnx`: only the settings a run was trained with are published.
+2. **Re-exports the checkpoint.** The checkpoint is always exported first
    through [`--export`](export.md) with `--strict`; a pre-existing
    `exported/policy.onnx` of unknown vintage is never uploaded. Strict turns
-   the code-changed-since-training warning `--export` alone prints into a
-   stop, and so is a run whose `env.yaml` or `agent.yaml` is missing or was
-   generated from the code by an earlier export. A `policy.onnx` whose actions
-   differ from the checkpoint is always a stop. `--onnx <file>` is the only way
-   to upload an existing ONNX
-   file as is.
-2. **Generates the model card** from `--title` and `--summary`.
-3. **Uploads everything as one git commit** on the Hub repo, with the message
+   the warnings `--export` alone prints (the code changed since training, or
+   has policy settings the run didn't save) into stops. A `policy.onnx` whose
+   actions differ from the checkpoint is always a stop. `--onnx <file>` is the
+   only way to upload an existing ONNX file as is.
+3. **Generates the model card** from `--title` and `--summary`.
+4. **Uploads everything as one git commit** on the Hub repo, with the message
    `Upload Asimov policy from <run folder name>`. The repo is created if it
    does not exist (`--private` makes it private).
 

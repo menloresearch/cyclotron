@@ -66,7 +66,8 @@ head are baked into the graph.
    built, it compares the policy settings with the run's `env.yaml` and
    `agent.yaml` again. Any difference means the rebuild failed and stops the
    export. A setting the current code has but the run didn't save (added since
-   training) keeps the code's value and is listed as a warning.
+   training) keeps the code's value and is listed as a warning; `--strict`
+   stops on it, since it doesn't come from the run.
 4. **Reports code changes since training.** It compares the run's
    `code_state.yaml` (or rsl_rl's `git/` records) with the code you have
    checked out; see
@@ -85,7 +86,17 @@ head are baked into the graph.
 8. **Checks the export.** Feeds the same observations to the checkpoint and to
    `policy.onnx` (as attached, through onnxruntime) and fails if any action
    differs by more than 1e-4, which would mean a broken export, for example a
-   dropped observation normalizer. Recurrent policies skip this check.
+   dropped observation normalizer. A recurrent policy (LSTM or GRU) is run for
+   3 steps from an empty memory on both sides, the ONNX file getting zeros as
+   `h_in`/`c_in` and then its own `h_out`/`c_out` back, as a robot runtime
+   does; the memory it returns is compared too. One step would not be enough:
+   from an empty memory, the weights that carry memory between steps multiply
+   zeros.
+
+rsl_rl's own exporter checks nothing: it traces the actor once on zero inputs
+and writes the file. Every check above, and the deploy metadata, are
+cyclotron's; rsl_rl's only safeguard is PyTorch's strict weight loading, which
+step 5 turns into a message naming the layers and sizes that don't fit.
 
 ## Options
 
@@ -96,7 +107,7 @@ head are baked into the graph.
 | `--load_run` | Run folder to export from. Defaults to the latest. |
 | `--experiment_name` | Experiment folder under `logs/rsl_rl/`. Defaults to the task's. |
 | `--output` | Folder to write to. Defaults to `<checkpoint folder>/exported`. |
-| `--strict` | Stop, instead of warning, if the code changed since the run was trained, and stop instead of asking when the run has no `env.yaml` or `agent.yaml` (or has one an earlier export generated). |
+| `--strict` | Stop, instead of warning, if the code changed since the run was trained or has policy settings the run didn't save, and stop instead of asking when the run has no `env.yaml` or `agent.yaml` (or has one an earlier export generated). |
 | `--device` | Device to run the export on (an AppLauncher flag; the export always runs headless). |
 
 Nothing else is accepted: setting overrides such as `env.actions.joint_pos.scale=0.3` are refused, since the run's

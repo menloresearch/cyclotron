@@ -77,13 +77,16 @@ trained with are unknown. Answering `y` writes it into the run's `params/`
 from the current code; its first line says it was generated, from which
 commit and when, and every later export of the run warns about it. Only say
 yes if the current code is what the run was trained with. Anything else stops
-the export, as does running without a terminal to answer in. `--strict`, and
-so `--share`, stops on such a run without asking.
+the export, as does running without a terminal to answer in. `--strict` stops
+on such a run without asking, and `--share` refuses it before exporting: a run
+missing either file reports `Missing files`, and one with a generated file says
+it was written from the code.
 
 ### "policy.onnx gives different actions than the checkpoint"
 
 The export self-check failed: the written ONNX does not reproduce the
-checkpoint's actions, so the file is wrong (for example, a dropped
+checkpoint's actions (for a recurrent policy, its actions or the memory it
+returns over the first 3 steps), so the file is wrong (for example, a dropped
 observation normalizer), not your run. Nothing was verified, so do not deploy
 or share the file. This points at an exporter bug — please report it with the
 run's `exported/export.log`.
