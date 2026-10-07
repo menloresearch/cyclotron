@@ -301,12 +301,18 @@ own machine:
 ssh -L 3000:localhost:3000 <remote>
 ```
 
-## Troubleshooting
+## Tested hardware
+
 The training code has been tested on the following GPUs:
 - NVIDIA RTX A6000
 - NVIDIA RTX PRO 6000
 - NVIDIA RTX 4090
 - NVIDIA RTX 3090
+
+## Troubleshooting
+
+Known failures — by symptom, with causes and fixes — are collected in
+[docs/troubleshooting.md](docs/troubleshooting.md).
 
 ## Acknowledgement
 

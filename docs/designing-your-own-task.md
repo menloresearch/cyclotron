@@ -294,7 +294,11 @@ group and a different runner base:
    (again with a new `experiment_name`). It swaps the algorithm for
    `AMPPPOAlgorithmCfg`, whose `amp_data` points the `MotionDatasetCfg` at
    the reference motion files; give it your own motions if the stock
-   slow-walk clip is not the style you want.
+   slow-walk clip is not the style you want. Producing those motions is
+   outside cyclotron's scope: a motion model such as NVIDIA's
+   [Kimodo](https://github.com/nv-tlabs/kimodo) can generate humanoid motion
+   clips from text, which are then retargeted to the robot. Proper
+   documentation of the motion file format is planned.
 3. Register the ids and add the `EXPERIMENT_TASKS` entry as before —
    `Asimov1-Velocity-AMP-v0` and `asimov_velocity_amp` are the pattern to
    follow.
