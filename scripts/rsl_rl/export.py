@@ -2,7 +2,8 @@
 
 Writes ``policy.onnx``, a TorchScript ``policy.pt`` and copies of the run's ``env.yaml``, ``agent.yaml`` and
 ``code_state.yaml``, so the folder holds the same files as a policy shared on the Hugging Face Hub. Runs Isaac Sim
-headless with one environment to build the policy, warns if the code changed since the run was trained, loads only
+headless with one environment to build the policy, warns if the code changed since the run was trained (and stops if
+the policy settings changed, since the deploy metadata would describe them instead of the trained ones), loads only
 the policy from the checkpoint, then checks that the ONNX file gives the same actions as the PyTorch policy.
 """
 
@@ -42,11 +43,21 @@ parser.add_argument(
 parser.add_argument(
     "--strict", action="store_true", help="Stop, instead of warning, if the code changed since the run was trained."
 )
+parser.add_argument(
+    "--allow_changed_settings",
+    action="store_true",
+    help="Export even if the policy settings changed since the run was trained; the deploy metadata then describes"
+    " the current settings, not the trained ones.",
+)
 AppLauncher.add_app_launcher_args(parser)
 args_cli, hydra_args = parser.parse_known_args()
 args_cli.headless = True
 
 # Check what can be checked before Isaac Sim starts, which takes a while.
+if args_cli.strict and args_cli.allow_changed_settings:
+    sys.exit(
+        "[ERROR] --strict stops on any change since training, so it can't be combined with --allow_changed_settings."
+    )
 checkpoint_is_path = args_cli.checkpoint is not None and os.sep in args_cli.checkpoint
 if checkpoint_is_path:
     args_cli.checkpoint = os.path.abspath(os.path.expanduser(args_cli.checkpoint))
@@ -112,8 +123,8 @@ from cyclotron.onnx_export import (
 installed_version = metadata.version("rsl-rl-lib")
 
 CODE_CHANGE_CONSEQUENCE = (
-    "policy.onnx comes from the checkpoint and env.yaml from the run, so they still match each other, but the ONNX"
-    " check runs on observations from the current code."
+    "The policy weights come from the checkpoint and env.yaml from the run, but the deploy metadata in policy.onnx"
+    " and the ONNX check come from the current code."
 )
 
 
@@ -124,6 +135,27 @@ def _per_joint(value, count: int) -> list[float]:
     if isinstance(value, torch.Tensor):
         return [float(v) for v in value[0]]
     return [float(value)] * count
+
+
+def _configured_offset(term) -> list[float]:
+    """A term's offset as configured, one float per joint.
+
+    With ``use_default_offset`` the live offset is the default pose of the one environment export builds, which
+    startup events such as ``randomize_joint_default_pos`` perturb. Resolve the robot's configured
+    ``init_state.joint_pos`` the way Isaac Lab builds the default pose instead.
+    """
+    from isaaclab.envs.mdp.actions import JointPositionAction
+    from isaaclab.utils.string import resolve_matching_names_values
+
+    if not (isinstance(term, JointPositionAction) and term.cfg.use_default_offset):
+        return _per_joint(term._offset, len(term._joint_names))
+    asset = term._asset
+    pose = [0.0] * asset.num_joints
+    indices, _, values = resolve_matching_names_values(asset.cfg.init_state.joint_pos, asset.joint_names)
+    for index, value in zip(indices, values):
+        pose[index] = float(value)
+    joint_ids = range(asset.num_joints) if isinstance(term._joint_ids, slice) else term._joint_ids
+    return [pose[int(i)] for i in joint_ids]
 
 
 def gather_deploy_metadata(env, policy, run_dir: str) -> dict[str, str] | None:
@@ -143,7 +175,7 @@ def gather_deploy_metadata(env, policy, run_dir: str) -> dict[str, str] | None:
             return None
         joint_names += list(names)
         scale += _per_joint(term._scale, len(names))
-        offset += _per_joint(term._offset, len(names))
+        offset += _configured_offset(term)
         # The configured gains, not the simulated ones, which startup randomization events can perturb.
         stiffness += [float(v) for v in term._asset.data.default_joint_stiffness[0, term._joint_ids]]
         damping += [float(v) for v in term._asset.data.default_joint_damping[0, term._joint_ids]]
@@ -204,8 +236,16 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     if level == "error":
         env.close()
         sys.exit(1)
-    if level == "warning" and args_cli.strict:
+    if level in ("warning", "settings") and args_cli.strict:
         log("[ERROR] Stopped by --strict: the code changed since the run was trained (see above).")
+        env.close()
+        sys.exit(1)
+    if level == "settings" and not args_cli.allow_changed_settings:
+        log(
+            "[ERROR] Stopped: the policy settings changed since the run was trained (see above), so the deploy metadata"
+            " would describe the current settings instead of the trained ones. Undo the change (or override it back),"
+            " check out the commit the run was trained on, or add --allow_changed_settings to export anyway."
+        )
         env.close()
         sys.exit(1)
     if isinstance(env.unwrapped, DirectMARLEnv):
@@ -253,6 +293,11 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             log(f"  {name}")
     if level == "warning":
         log("[WARNING] The code changed since this run was trained; see the warning before the export.")
+    if level == "settings":
+        log(
+            "[WARNING] Exported with --allow_changed_settings: the deploy metadata in policy.onnx describes the current"
+            " policy settings, not the ones the run was trained with; see the warning before the export."
+        )
     if difference is not None:
         # Exit here rather than after simulation_app.close(): hydra_task_config drops main's return value. Isaac Sim
         # replaces sys.exit with a version that only takes an exit code, so the message is printed first.

@@ -47,6 +47,18 @@ worktree works well) and re-run, pass the trained values back as overrides,
 or decide the changes are harmless and export without `--strict`. Background
 in [Code changes since training](../README.md#code-changes-since-training).
 
+### "Stopped: the policy settings changed since the run was trained"
+
+`--export` stops on its own, without `--strict`, when a policy setting (an
+observation, the action scale, the default pose, actuator gains, `sim.dt`,
+decimation) differs from the run's `env.yaml`. The deploy metadata in
+`policy.onnx` is read from the current code, so it would tell the robot to
+use the new settings with weights trained on the old ones. The message above
+the stop lists each setting by its override path: pass the trained values back
+on the command line, or check out the trained commit. If the new settings are
+what you mean to deploy, add `--allow_changed_settings`; the export then ends
+with a reminder that the metadata describes the current settings.
+
 ### "policy.onnx gives different actions than the checkpoint"
 
 The export self-check failed: the written ONNX does not reproduce the

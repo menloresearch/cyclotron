@@ -416,8 +416,9 @@ def _check_out_hint(run_dir: str) -> str:
 
 
 def describe_changes(run_dir: str, env_cfg: dict, agent_cfg: dict, consequence: str) -> tuple[str, str]:
-    """Compare a run with the current code. Returns the message to print and its level: ``"ok"``, ``"warning"``,
-    or ``"error"`` when the policy's network changed in a way its weights can't show.
+    """Compare a run with the current code. Returns the message to print and its level: ``"ok"``, ``"warning"``
+    when only code changed (or the run can't be checked), ``"settings"`` when the policy settings (what the policy
+    sees and does) changed too, or ``"error"`` when the policy's network changed in a way its weights can't show.
 
     ``env_cfg`` and ``agent_cfg`` are the current configs as plain dicts (Isaac Lab's ``class_to_dict``), taken where
     training saves them: after the environment is created.
@@ -451,7 +452,7 @@ def describe_changes(run_dir: str, env_cfg: dict, agent_cfg: dict, consequence: 
         lines.append(f"  {_check_out_hint(run_dir)}")
     else:
         lines.append(f"  {consequence}")
-    return "\n".join(lines), "error" if errors else "warning"
+    return "\n".join(lines), "error" if errors else "settings" if settings else "warning"
 
 
 # -- Loading only the policy -----------------------------------------------------------------------------------

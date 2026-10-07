@@ -212,7 +212,9 @@ code and print what changed:
   are compared with the commits rsl_rl logged in the run's `git/` folder.
 
 These are warnings, since experiments change code on purpose; add `--strict` to
-stop instead. Two cases always stop. One is a checkpoint whose policy no longer
+stop instead. `--export` also stops on a changed policy setting, because the
+deploy metadata it writes would describe the new setting rather than the
+trained one; `--allow_changed_settings` exports anyway. Two cases always stop. One is a checkpoint whose policy no longer
 fits the network the current code builds, for example because an observation
 term was added and the input size changed. The other is a changed actor class
 or activation, which would load the old weights but compute something else.

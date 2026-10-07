@@ -141,7 +141,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     if level == "error":
         env.close()
         sys.exit(1)
-    if level == "warning" and args_cli.strict:
+    if level in ("warning", "settings") and args_cli.strict:
         # Isaac Sim replaces sys.exit with a version that only takes an exit code, so the message is printed first.
         print("[ERROR] Stopped by --strict: the code changed since the run was trained (see above).")
         env.close()
