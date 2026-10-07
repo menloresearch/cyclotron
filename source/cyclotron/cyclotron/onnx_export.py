@@ -100,7 +100,8 @@ def export_log(output_dir: str, header: str):
         f.write(f"--- {datetime.now().isoformat(timespec='seconds')} {header}\n")
 
     def log(message: str) -> None:
-        print(message)
+        # Flushed: Isaac Sim exits without flushing a stdout that is redirected to a file or a pipe.
+        print(message, flush=True)
         with open(path, "a") as f:
             f.write(message + "\n")
 

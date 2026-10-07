@@ -60,6 +60,26 @@ back what was removed. A function that only moved to another module, for
 example from the package's old name `isaac_asimov`, is found under its new
 module and doesn't stop the export.
 
+### "The rebuilt policy settings don't match the run's env.yaml and agent.yaml"
+
+`--export` set the policy settings back to the run's files, built the
+environment, and found a setting that still differs from them. Isaac Lab
+changed it while building the environment, or the rebuild missed it, so the
+exported policy wouldn't be the trained one. That is a bug in the rebuild
+(`source/cyclotron/cyclotron/run_config.py`), not in the run: the lines under
+the error name each setting. Until it is fixed, export from a checkout of the
+commit the run was trained with.
+
+### "params has no env.yaml" (`Generate … from the current code? [y/N]`)
+
+The run doesn't have the file every export ships with, so the settings it was
+trained with are unknown. Answering `y` writes it into the run's `params/`
+from the current code; its first line says it was generated, from which
+commit and when, and every later export of the run warns about it. Only say
+yes if the current code is what the run was trained with. Anything else stops
+the export, as does running without a terminal to answer in. `--strict`, and
+so `--share`, stops on such a run without asking.
+
 ### "policy.onnx gives different actions than the checkpoint"
 
 The export self-check failed: the written ONNX does not reproduce the

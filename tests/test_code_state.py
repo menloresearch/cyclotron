@@ -26,6 +26,7 @@ from cyclotron.code_state import (
     policy_interface,
     policy_shape_errors,
     read_git_records,
+    rebuild_differences,
     record_code_state,
     training_code,
     training_commit,
@@ -303,6 +304,23 @@ def test_files_changed_since_ignores_pure_renames(tmp_path):
     (tmp_path / "source" / "new_name" / "obs.py").write_text("scale = 0.5\n" + "scale = 0.25\n" * 19)
     assert files_changed_since(str(tmp_path), commit) == ["source/new_name/obs.py"]
     assert files_changed_since(str(tmp_path), "0" * 40) is None
+
+
+def test_rebuild_differences_flags_values_unlike_the_run_and_lists_settings_it_did_not_save(tmp_path):
+    params = tmp_path / "params"
+    params.mkdir()
+    (params / "env.yaml").write_text(dump(make_env()))
+    (params / "agent.yaml").write_text(dump(make_agent()))
+    assert rebuild_differences(str(tmp_path), make_env(), make_agent()) == ([], [])
+
+    env, agent = make_env(), make_agent()
+    env["actions"]["joint_pos"]["scale"] = 0.5
+    env["actions"]["joint_pos"]["clip"] = {".*": (-1.0, 1.0)}  # a setting added to the code since training
+    agent["actor"]["activation"] = "relu"
+    assert rebuild_differences(str(tmp_path), env, agent) == (
+        ["env.actions.joint_pos.scale: 0.25 -> 0.5", "agent.actor.activation: elu -> relu"],
+        ["env.actions.joint_pos.clip[.*]: none -> [-1.0, 1.0]"],
+    )
 
 
 def test_describe_changes_is_quiet_when_nothing_changed_and_warns_otherwise(tmp_path):

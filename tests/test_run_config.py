@@ -7,7 +7,14 @@ from types import SimpleNamespace
 import pytest
 import yaml
 
-from cyclotron.run_config import load_run_configs, restore_policy_settings
+from cyclotron.run_config import (
+    GENERATED_HEADER,
+    generated_run_configs,
+    load_run_configs,
+    mark_generated,
+    missing_run_configs,
+    restore_policy_settings,
+)
 
 # Plain dataclasses shaped like the Isaac Lab and rsl_rl configs export restores. Like Isaac Lab's configclass, some
 # defaults are factories.
@@ -145,16 +152,11 @@ def test_restore_sets_the_policy_settings_back_to_the_run():
     assert agent.clip_actions == 1.0
 
 
-def test_restore_keeps_command_line_overrides():
+def test_restore_leaves_a_side_the_run_did_not_save_as_the_code_has_it():
     env, agent = make_cfgs()
-    # Hydra applied these before the restore.
-    env.actions.joint_pos.scale = 0.3
-    env.scene.robot.actuators["legs"].stiffness = {".*": 120.0}
-    overridden = ["env.actions.joint_pos.scale", "env.scene.robot.actuators.legs.stiffness"]
-    assert restore_policy_settings(env, agent, *saved_configs(), overridden=overridden) == []
-    assert env.actions.joint_pos.scale == 0.3
-    assert env.scene.robot.actuators["legs"].stiffness == {".*": 120.0}
+    assert restore_policy_settings(env, agent, saved_configs()[0], {}) == []
     assert env.decimation == 5
+    assert type(agent.actor) is ModelCfg and agent.clip_actions is None
 
 
 def test_restore_lists_the_settings_the_current_code_cannot_take():
@@ -178,7 +180,7 @@ def test_restore_lists_the_settings_the_current_code_cannot_take():
 def test_load_run_configs_reads_tuples_and_slices_but_no_other_python_objects(tmp_path):
     params = tmp_path / "params"
     params.mkdir()
-    assert load_run_configs(str(tmp_path)) is None
+    assert load_run_configs(str(tmp_path)) == ({}, {})
     (params / "env.yaml").write_text(
         "clip: !!python/tuple\n- -5.0\n- 5.0\njoint_ids: !!python/object/apply:builtins.slice\n- null\n- null\n- null\n"
     )
@@ -187,3 +189,17 @@ def test_load_run_configs_reads_tuples_and_slices_but_no_other_python_objects(tm
     (params / "agent.yaml").write_text("seed: !!python/object/apply:os.getcwd []\n")
     with pytest.raises(yaml.constructor.ConstructorError):
         load_run_configs(str(tmp_path))
+
+
+def test_generated_run_configs_are_found_by_their_first_line(tmp_path):
+    params = tmp_path / "params"
+    params.mkdir()
+    assert missing_run_configs(str(tmp_path)) == ["env.yaml", "agent.yaml"]
+    (params / "env.yaml").write_text("decimation: 4\n")
+    (params / "agent.yaml").write_text("seed: 42\n")
+    assert missing_run_configs(str(tmp_path)) == [] and generated_run_configs(str(tmp_path)) == []
+    mark_generated(str(params / "agent.yaml"), "main @ 1234567", "2026-10-07 12:00")
+    assert generated_run_configs(str(tmp_path)) == ["agent.yaml"]
+    assert (params / "agent.yaml").read_text().startswith(f"{GENERATED_HEADER} (main @ 1234567) on 2026-10-07 12:00:")
+    # The header is a yaml comment, so the file still loads as before.
+    assert load_run_configs(str(tmp_path)) == ({"decimation": 4}, {"seed": 42})

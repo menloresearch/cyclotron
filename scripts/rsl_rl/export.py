@@ -2,10 +2,11 @@
 
 Writes ``policy.onnx``, a TorchScript ``policy.pt`` and copies of the run's ``env.yaml``, ``agent.yaml`` and
 ``code_state.yaml``, so the folder holds the same files as a policy shared on the Hugging Face Hub. Runs Isaac Sim
-headless with one environment to build the policy, with the policy settings set back to the ones the run saved in its
-``env.yaml`` and ``agent.yaml`` (Hydra overrides on the command line apply on top), warns if the code changed since
-the run was trained, loads only the policy from the checkpoint, then checks that the ONNX file gives the same actions
-as the PyTorch policy.
+headless with one environment to build the policy, like a restart of the run: the policy settings are set back to
+the ones the run saved in its ``env.yaml`` and ``agent.yaml``, which are their only source (no overrides), and are
+checked against those files once the environment is built. Warns if the code changed since the run was trained,
+loads only the policy from the checkpoint, then checks that the ONNX file gives the same actions as the PyTorch
+policy. A run without ``env.yaml`` or ``agent.yaml`` can have them written from the current code, if you agree.
 """
 
 import argparse
@@ -45,12 +46,15 @@ parser.add_argument(
     "--strict", action="store_true", help="Stop, instead of warning, if the code changed since the run was trained."
 )
 AppLauncher.add_app_launcher_args(parser)
-args_cli, hydra_args = parser.parse_known_args()
+args_cli, unknown_args = parser.parse_known_args()
 args_cli.headless = True
-# Settings given as Hydra overrides keep their value when the run's saved settings are restored.
-OVERRIDDEN = [arg.split("=")[0].lstrip("+~") for arg in hydra_args]
 
 # Check what can be checked before Isaac Sim starts, which takes a while.
+if unknown_args:
+    sys.exit(
+        f"[ERROR] --export takes no setting overrides or other extra arguments ({' '.join(unknown_args)}): the run's"
+        " env.yaml and agent.yaml are the only source of its settings."
+    )
 checkpoint_is_path = args_cli.checkpoint is not None and os.sep in args_cli.checkpoint
 if checkpoint_is_path:
     args_cli.checkpoint = os.path.abspath(os.path.expanduser(args_cli.checkpoint))
@@ -72,36 +76,36 @@ if args_cli.task is None:
     except ValueError as error:
         sys.exit(f"[ERROR] {error}")
 
-sys.argv = [sys.argv[0]] + hydra_args
+sys.argv = [sys.argv[0]]
 
 app_launcher = AppLauncher(args_cli)
 simulation_app = app_launcher.app
 
 
 import importlib.metadata as metadata
+from datetime import datetime
 
 import gymnasium as gym
 from rsl_rl.runners import DistillationRunner, OnPolicyRunner
 
 import isaaclab_tasks  # noqa: F401
-from isaaclab.envs import (
-    DirectMARLEnv,
-    DirectMARLEnvCfg,
-    DirectRLEnvCfg,
-    ManagerBasedRLEnvCfg,
-    multi_agent_to_single_agent,
-)
+from isaaclab.envs import DirectMARLEnv, multi_agent_to_single_agent
 from isaaclab.utils.dict import class_to_dict
-from isaaclab_rl.rsl_rl import (
-    RslRlBaseRunnerCfg,
-    RslRlVecEnvWrapper,
-    handle_deprecated_rsl_rl_cfg,
-    handle_deprecated_rsl_rl_checkpoint,
-)
-from isaaclab_tasks.utils.hydra import hydra_task_config
+from isaaclab.utils.io import dump_yaml
+from isaaclab_rl.rsl_rl import RslRlVecEnvWrapper, handle_deprecated_rsl_rl_cfg, handle_deprecated_rsl_rl_checkpoint
+from isaaclab_tasks.utils.parse_cfg import load_cfg_from_registry
 
 import cyclotron.tasks  # noqa: F401
-from cyclotron.code_state import check_out_hint, describe_changes, load_policy, training_commit
+from cyclotron.code_state import (
+    check_out_hint,
+    code_differences,
+    current_code,
+    load_policy,
+    normalize_config,
+    rebuild_differences,
+    record_code_state,
+    training_commit,
+)
 from cyclotron.onnx_export import (
     BUNDLE_YAMLS,
     OPTIONAL_BUNDLE_YAMLS,
@@ -112,14 +116,37 @@ from cyclotron.onnx_export import (
     export_log,
     max_onnx_difference,
 )
-from cyclotron.run_config import load_run_configs, restore_policy_settings
+from cyclotron.run_config import (
+    RUN_CONFIGS,
+    generated_run_configs,
+    load_run_configs,
+    mark_generated,
+    missing_run_configs,
+    restore_policy_settings,
+)
 
 installed_version = metadata.version("rsl-rl-lib")
 
 CODE_CHANGE_CONSEQUENCE = (
-    "Export set the policy settings back to the run's env.yaml and agent.yaml, but the code behind them (observation"
-    " and action functions, the robot model) is the current code."
+    "The policy settings come from the run's env.yaml and agent.yaml, but the code behind them (observation and"
+    " action functions, the robot model) is the current code."
 )
+
+
+def ask_to_generate(run_dir: str, missing: list[str], log) -> bool:
+    """Ask in the terminal whether to write the run's missing configs from the current code. No answer is a no."""
+    files = " and ".join(missing)
+    log(f"[WARNING] {run_dir}/params has no {files}, so the settings this run was trained with are unknown.")
+    log(
+        f"  Export can write {files} from the current code ({current_code()}) into params/, marked as generated."
+        " The exported policy then gets the current code's settings, which may not be the ones it was trained with."
+    )
+    try:
+        answer = input(f"Generate {files} from the current code? [y/N] ").strip()
+    except EOFError:
+        answer = ""
+    log(f"  Answer: {answer or 'none'}")
+    return answer.lower() in ("y", "yes")
 
 
 def _per_joint(value, count: int) -> list[float]:
@@ -198,8 +225,10 @@ def gather_deploy_metadata(env, policy, run_dir: str) -> dict[str, str] | None:
     )
 
 
-@hydra_task_config(args_cli.task, "rsl_rl_cfg_entry_point")
-def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agent_cfg: RslRlBaseRunnerCfg):
+def main():
+    # Straight from the task's registration, without Hydra: nothing on the command line changes a setting.
+    env_cfg = load_cfg_from_registry(args_cli.task.split(":")[-1], "env_cfg_entry_point")
+    agent_cfg = load_cfg_from_registry(args_cli.task.split(":")[-1], "rsl_rl_cfg_entry_point")
     if args_cli.experiment_name is not None:
         agent_cfg.experiment_name = args_cli.experiment_name
     if args_cli.load_run is not None:
@@ -220,32 +249,77 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     if note:
         log(f"[INFO] {note}")
 
-    saved = load_run_configs(run_dir)
-    if saved is not None:
-        problems = restore_policy_settings(env_cfg, agent_cfg, *saved, overridden=OVERRIDDEN)
-        if problems:
-            log("[ERROR] The current code can't rebuild the policy settings this run was trained with:")
-            for line in problems:
-                log(f"    {line}")
-            log(f"  {check_out_hint(run_dir)}")
+    # A policy is exported with the env.yaml and agent.yaml it was trained with.
+    not_saved = missing_run_configs(run_dir)
+    if not_saved:
+        if args_cli.strict:
+            log(f"[ERROR] Stopped by --strict: {run_dir}/params has no {' and '.join(not_saved)}.")
             sys.exit(1)
-        log("[INFO] Set the policy settings back to the ones in the run's env.yaml and agent.yaml.")
+        if not ask_to_generate(run_dir, not_saved, log):
+            log(
+                "[ERROR] Stopped: a policy is exported with its env.yaml and agent.yaml, and this run has no"
+                f" {' and '.join(not_saved)}."
+            )
+            sys.exit(1)
+    generated = generated_run_configs(run_dir)
+    if generated:
+        message = (
+            f"{run_dir}/params/{' and '.join(generated)} was written from the code by an earlier --export, not by"
+            " training."
+        )
+        if args_cli.strict:
+            log(f"[ERROR] Stopped by --strict: {message}")
+            sys.exit(1)
+        log(f"[WARNING] {message}")
+
+    problems = restore_policy_settings(env_cfg, agent_cfg, *load_run_configs(run_dir))
+    if problems:
+        log("[ERROR] The current code can't rebuild the policy settings this run was trained with:")
+        for line in problems:
+            log(f"    {line}")
+        log(f"  {check_out_hint(run_dir)}")
+        sys.exit(1)
+    saved = [name for name in RUN_CONFIGS if name not in not_saved]
+    if saved:
+        log(f"[INFO] Set the policy settings back to the ones in the run's {' and '.join(saved)}.")
     # After the restore, which can bring back a network config of another kind (e.g. an LSTM actor).
     agent_cfg = handle_deprecated_rsl_rl_cfg(agent_cfg, installed_version)
 
     env = gym.make(args_cli.task, cfg=env_cfg)
-    # Compared where train.py saves params/: after the environment is created, which resolves parts of the config.
-    changes, level = describe_changes(
-        run_dir, class_to_dict(env_cfg), class_to_dict(agent_cfg), CODE_CHANGE_CONSEQUENCE
-    )
-    log(changes)
-    if level == "error":
+    # Written and compared where train.py saves params/: after the environment is created, which resolves parts of
+    # the config.
+    env_dict, agent_dict = class_to_dict(env_cfg), class_to_dict(agent_cfg)
+    for name, cfg in zip(RUN_CONFIGS, (env_cfg, agent_cfg)):
+        if name in not_saved:
+            path = os.path.join(run_dir, "params", name)
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            dump_yaml(path, cfg)
+            mark_generated(path, current_code(), datetime.now().strftime("%Y-%m-%d %H:%M"))
+            log(f"[WARNING] Wrote {path} from the current code, marked as generated.")
+    mismatches, new = rebuild_differences(run_dir, env_dict, agent_dict)
+    if mismatches:
+        log("[ERROR] The rebuilt policy settings don't match the run's env.yaml and agent.yaml:")
+        for line in mismatches:
+            log(f"    {line}")
         env.close()
         sys.exit(1)
-    if level == "warning" and args_cli.strict:
-        log("[ERROR] Stopped by --strict: the code changed since the run was trained (see above).")
-        env.close()
-        sys.exit(1)
+    log("[INFO] Checked the rebuilt policy settings against the run's env.yaml and agent.yaml: they match.")
+    if new:
+        log(
+            "[WARNING] The current code has policy settings the run didn't save; they keep the current code's" " value:"
+        )
+        for line in new:
+            log(f"    {line}")
+    code = code_differences(run_dir, record_code_state(normalize_config(env_dict)))
+    if code:
+        log("[WARNING] The code has changed since this run was trained:")
+        for line in code:
+            log(f"    {line}")
+        log(f"  {CODE_CHANGE_CONSEQUENCE}")
+        if args_cli.strict:
+            log("[ERROR] Stopped by --strict: the code changed since the run was trained (see above).")
+            env.close()
+            sys.exit(1)
     if isinstance(env.unwrapped, DirectMARLEnv):
         env = multi_agent_to_single_agent(env)
     env = RslRlVecEnvWrapper(env, clip_actions=agent_cfg.clip_actions)
@@ -289,11 +363,12 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     for name in ("policy.onnx", "policy.pt", *BUNDLE_YAMLS, *OPTIONAL_BUNDLE_YAMLS):
         if name not in missing and os.path.isfile(os.path.join(output_dir, name)):
             log(f"  {name}")
-    if level == "warning":
-        log("[WARNING] The code changed since this run was trained; see the warning before the export.")
+    if not_saved or generated:
+        log(f"[WARNING] {' and '.join(not_saved or generated)} came from the current code, not from training.")
+    if code or new:
+        log("[WARNING] The code changed since this run was trained; see the warnings before the export.")
     if difference is not None:
-        # Exit here rather than after simulation_app.close(): hydra_task_config drops main's return value. Isaac Sim
-        # replaces sys.exit with a version that only takes an exit code, so the message is printed first.
+        # Isaac Sim replaces sys.exit with a version that only takes an exit code, so the message is printed first.
         if difference > ONNX_TOLERANCE:
             log(f"[ERROR] policy.onnx gives different actions than the checkpoint (max difference {difference:.2e}).")
             sys.exit(1)

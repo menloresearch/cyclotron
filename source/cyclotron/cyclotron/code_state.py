@@ -454,6 +454,34 @@ def describe_changes(run_dir: str, env_cfg: dict, agent_cfg: dict, consequence: 
     return "\n".join(lines), "error" if errors else "warning"
 
 
+def rebuild_differences(run_dir: str, env_cfg: dict, agent_cfg: dict) -> tuple[list[str], list[str]]:
+    """Compare the policy settings ``--export`` rebuilt from a run's ``env.yaml`` and ``agent.yaml`` with the saved
+    ones. Returns ``(mismatches, new)``, one line each: settings whose value differs from the run's, which means the
+    rebuild failed, and settings the run didn't save (added to the code since), which keep the current code's value.
+
+    ``env_cfg`` and ``agent_cfg`` are the current configs as plain dicts (Isaac Lab's ``class_to_dict``), taken where
+    training saves them: after the environment is created.
+    """
+    saved = []
+    for name in ("env.yaml", "agent.yaml"):
+        with open(os.path.join(run_dir, "params", name)) as f:
+            saved.append(load_config(f.read()))
+    before = policy_interface(*saved)
+    after = policy_interface(normalize_config(env_cfg), normalize_config(agent_cfg))
+    mismatches, new = [], []
+    for key in dict.fromkeys([*before, *after]):
+        old, value = before.get(key), after.get(key)
+        if old == value or (_unset(old) and _unset(value)):
+            continue
+        (mismatches if key in before else new).append(f"{key}: {_describe(old, value)}")
+    return mismatches, new
+
+
+def current_code() -> str:
+    """Where the cyclotron package is imported from, e.g. ``exp/drift @ 32aef5c with uncommitted changes``."""
+    return _where(_git_state(package_dir()))
+
+
 # -- Loading only the policy -----------------------------------------------------------------------------------
 
 

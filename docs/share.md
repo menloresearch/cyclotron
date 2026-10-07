@@ -39,8 +39,10 @@ directory itself is not changed.
    through [`--export`](export.md) with `--strict`; a pre-existing
    `exported/policy.onnx` of unknown vintage is never uploaded. Strict turns
    the code-changed-since-training warning `--export` alone prints into a
-   stop, and a `policy.onnx` whose actions differ from the checkpoint is
-   always one. `--onnx <file>` is the only way to upload an existing ONNX
+   stop, and so is a run whose `env.yaml` or `agent.yaml` is missing or was
+   generated from the code by an earlier export. A `policy.onnx` whose actions
+   differ from the checkpoint is always a stop. `--onnx <file>` is the only way
+   to upload an existing ONNX
    file as is.
 2. **Generates the model card** from `--title` and `--summary`.
 3. **Uploads everything as one git commit** on the Hub repo, with the message
