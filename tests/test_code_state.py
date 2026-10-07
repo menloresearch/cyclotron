@@ -17,8 +17,10 @@ from cyclotron.code_state import (
     code_differences,
     compare_code_state,
     describe_changes,
+    edited_run_configs,
     files_changed_since,
     hash_files,
+    hash_run_configs,
     interface_differences,
     load_config,
     load_policy,
@@ -135,7 +137,9 @@ def test_saved_yaml_with_python_tags_reads_like_the_current_config():
     text = dump(make_env())
     assert "!!python/tuple" in text and "builtins.slice" in text
     assert differences(make_env()) == ([], [])
-    assert load_config(text)["sim"]["gravity"] == [0.0, 0.0, -9.81]
+    saved = load_config(text)
+    assert saved["sim"]["gravity"] == (0.0, 0.0, -9.81)
+    assert saved["observations"]["policy"]["joint_pos_slot01"]["params"]["asset_cfg"]["joint_ids"] == slice(None)
 
 
 def test_changes_to_what_the_policy_sees_and_does_are_named_as_overrides():
@@ -304,6 +308,24 @@ def test_files_changed_since_ignores_pure_renames(tmp_path):
     (tmp_path / "source" / "new_name" / "obs.py").write_text("scale = 0.5\n" + "scale = 0.25\n" * 19)
     assert files_changed_since(str(tmp_path), commit) == ["source/new_name/obs.py"]
     assert files_changed_since(str(tmp_path), "0" * 40) is None
+
+
+def test_edited_run_configs_compares_with_the_sha256_training_recorded(tmp_path):
+    params = tmp_path / "params"
+    params.mkdir()
+    (params / "env.yaml").write_text(dump(make_env()))
+    (params / "agent.yaml").write_text(dump(make_agent()))
+    assert edited_run_configs(str(tmp_path)) is None  # no code_state.yaml
+    write_code_state(str(params), record_code_state(make_env()))
+    assert edited_run_configs(str(tmp_path)) is None  # trained before training recorded the hashes
+
+    state = record_code_state(make_env())
+    state["run_configs"] = hash_run_configs(str(params))
+    write_code_state(str(params), state)
+    assert edited_run_configs(str(tmp_path)) == []
+    (params / "env.yaml").write_text(dump(make_env()).replace("decimation: 4", "decimation: 8"))
+    os.remove(params / "agent.yaml")
+    assert edited_run_configs(str(tmp_path)) == ["env.yaml", "agent.yaml"]
 
 
 def test_rebuild_differences_flags_values_unlike_the_run_and_lists_settings_it_did_not_save(tmp_path):

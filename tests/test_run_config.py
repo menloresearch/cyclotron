@@ -4,13 +4,10 @@ import math
 from dataclasses import dataclass, field
 from types import SimpleNamespace
 
-import pytest
-import yaml
-
+from cyclotron.code_state import load_run_configs
 from cyclotron.run_config import (
     GENERATED_HEADER,
     generated_run_configs,
-    load_run_configs,
     mark_generated,
     missing_run_configs,
     restore_policy_settings,
@@ -166,29 +163,34 @@ def test_restore_lists_the_settings_the_current_code_cannot_take():
     saved_env["observations"]["policy"]["joint_pos"]["func"] = "isaac_asimov.tasks.mdp:joint_pos_abs"
     saved_env["scene"]["robot"]["actuators"]["waist"] = {"class_type": "isaac_asimov.actuators:Actuator"}
     saved_agent["actor"]["class_name"] = "TransformerModel"
+    # What the yaml loader leaves of a Python object it won't construct.
+    saved_env["decimation"] = "!!python/object/apply:os.getcwd"
     assert restore_policy_settings(env, agent, saved_env, saved_agent) == [
         "env.observations.policy.joint_pos.func: the run used isaac_asimov.tasks.mdp:joint_pos_abs, which the current"
         " code doesn't have",
         "env.observations.policy.height_scan: the run has this setting, the current code doesn't",
         "env.scene.robot.actuators.waist: the run has this entry, the current code doesn't",
+        "env.decimation: the run saved a Python object here that can't be read back"
+        " (!!python/object/apply:os.getcwd)",
         "agent.actor.class_name: the run used TransformerModel, which no config class in the current code has",
         "agent.actor.rnn_type: the run has this setting, the current code doesn't",
         "agent.actor.rnn_hidden_dim: the run has this setting, the current code doesn't",
     ]
 
 
-def test_load_run_configs_reads_tuples_and_slices_but_no_other_python_objects(tmp_path):
+def test_load_run_configs_rebuilds_tuples_and_slices_but_no_other_python_objects(tmp_path):
     params = tmp_path / "params"
     params.mkdir()
     assert load_run_configs(str(tmp_path)) == ({}, {})
     (params / "env.yaml").write_text(
         "clip: !!python/tuple\n- -5.0\n- 5.0\njoint_ids: !!python/object/apply:builtins.slice\n- null\n- null\n- null\n"
     )
-    (params / "agent.yaml").write_text("seed: 42\n")
-    assert load_run_configs(str(tmp_path)) == ({"clip": (-5.0, 5.0), "joint_ids": slice(None)}, {"seed": 42})
     (params / "agent.yaml").write_text("seed: !!python/object/apply:os.getcwd []\n")
-    with pytest.raises(yaml.constructor.ConstructorError):
-        load_run_configs(str(tmp_path))
+    # The object is never built: it reads as its tag, which the restore refuses.
+    assert load_run_configs(str(tmp_path)) == (
+        {"clip": (-5.0, 5.0), "joint_ids": slice(None)},
+        {"seed": "!!python/object/apply:os.getcwd"},
+    )
 
 
 def test_generated_run_configs_are_found_by_their_first_line(tmp_path):

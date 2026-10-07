@@ -1,6 +1,24 @@
 from __future__ import annotations
 
-from cyclotron.hub import strip_local_paths
+import hashlib
+
+import yaml
+
+from cyclotron.hub import rehash_uploaded_run_configs, strip_local_paths
+
+
+def sha256(text: str) -> str:
+    return hashlib.sha256(text.encode()).hexdigest()
+
+
+def test_rehash_uploaded_run_configs_points_code_state_at_the_uploaded_copies():
+    env, agent = "asset_path: /home/me/robot.urdf\n", "seed: 1\n"
+    recorded = {"env.yaml": sha256(env), "agent.yaml": sha256(agent)}
+    uploaded = {"env.yaml": strip_local_paths(env)[0], "agent.yaml": agent}
+    code_state = yaml.safe_dump({"run_configs": recorded}, sort_keys=False)
+    rehashed = yaml.safe_load(rehash_uploaded_run_configs(code_state, recorded, uploaded))["run_configs"]
+    assert rehashed == {"env.yaml": sha256("asset_path: robot.urdf\n"), "agent.yaml": sha256(agent)}
+
 
 # Trimmed copy of a real shared env.yaml: Isaac Lab tags, training-machine paths and internal module names.
 ENV_YAML = """\

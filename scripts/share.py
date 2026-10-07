@@ -18,7 +18,8 @@ import re
 import subprocess
 import sys
 
-from cyclotron.hub import infer_task, strip_local_paths
+from cyclotron.code_state import edited_run_configs, hash_run_configs
+from cyclotron.hub import infer_task, rehash_uploaded_run_configs, strip_local_paths
 from cyclotron.run_config import generated_run_configs
 
 README_TEMPLATE = """---
@@ -38,7 +39,8 @@ license: bsd-3-clause
 """
 CODE_STATE_LINE = (
     "- `code_state.yaml` records the code the policy was trained with: the commit, a hash of each training-code"
-    " file, the robot model and the package versions.\n"
+    " file, the robot model and the package versions, and (for runs that record them) the sha256 of the uploaded"
+    " `env.yaml` and `agent.yaml`.\n"
 )
 
 DEFAULT_TITLE = "Asimov 1 locomotion policy checkpoint"
@@ -128,6 +130,12 @@ def main() -> None:
             f"[ERROR] {run_dir}/params/{' and '.join(generated)} was written from the code by an earlier --export,"
             " not by training; --share only publishes the settings a run was trained with."
         )
+    edited = edited_run_configs(run_dir)
+    if edited:
+        sys.exit(
+            f"[ERROR] {run_dir}/params/{' and '.join(edited)} changed since training: it no longer matches the sha256"
+            " the run's code_state.yaml recorded, and --share only publishes the settings a run was trained with."
+        )
     code_state = os.path.join(run_dir, "params", "code_state.yaml")
     if os.path.isfile(code_state):
         files["code_state.yaml"] = code_state
@@ -162,6 +170,10 @@ def main() -> None:
             yamls[name], removed = strip_local_paths(f.read())
         for path in removed:
             print(f"[INFO] Removing local path from {name}: {path}")
+    # code_state.yaml records the sha256 of the run's env.yaml and agent.yaml; the Hub copy records the uploaded ones.
+    if "code_state.yaml" in yamls:
+        recorded = hash_run_configs(os.path.join(run_dir, "params"))
+        yamls["code_state.yaml"] = rehash_uploaded_run_configs(yamls["code_state.yaml"], recorded, yamls)
 
     if args_cli.dry_run:
         if needs_export:

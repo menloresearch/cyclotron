@@ -87,7 +87,7 @@ from isaaclab_rl.rsl_rl import RslRlBaseRunnerCfg, RslRlVecEnvWrapper, handle_de
 from isaaclab_tasks.utils.hydra import hydra_task_config
 
 import cyclotron.tasks  # noqa: F401
-from cyclotron.code_state import record_code_state, write_code_state
+from cyclotron.code_state import hash_run_configs, record_code_state, write_code_state
 
 logger = logging.getLogger(__name__)
 
@@ -195,9 +195,10 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     dump_yaml(os.path.join(log_dir, "params", "agent.yaml"), agent_cfg)
     # What --export and --play compare against to warn about code changes; <run>/<file>, not a local path.
     loaded = os.path.join(*resume_path.split(os.sep)[-2:]) if loads_checkpoint else None
-    write_code_state(
-        os.path.join(log_dir, "params"), record_code_state(class_to_dict(env_cfg), loaded_checkpoint=loaded)
-    )
+    code_state = record_code_state(class_to_dict(env_cfg), loaded_checkpoint=loaded)
+    # The sha256 of the two files just written, so --export and --share notice if they are edited later.
+    code_state["run_configs"] = hash_run_configs(os.path.join(log_dir, "params"))
+    write_code_state(os.path.join(log_dir, "params"), code_state)
 
     print_run_info(log_dir)
     try:

@@ -5,6 +5,7 @@ Plain Python with no Isaac Lab imports, so it can run without Isaac Sim and in t
 
 from __future__ import annotations
 
+import hashlib
 import ntpath
 import os
 import re
@@ -76,3 +77,12 @@ def strip_local_paths(text: str) -> tuple[str, list[str]]:
                 body = f"{indent}{dash or ''}{name}: {_strip_value(value, removed)}{trailing}"
         lines.append(body + newline)
     return "".join(lines), removed
+
+
+def rehash_uploaded_run_configs(code_state: str, recorded: dict[str, str], uploaded: dict[str, str]) -> str:
+    """Point a run's ``code_state.yaml`` text at the copies of ``env.yaml`` and ``agent.yaml`` being uploaded, which
+    have local paths stripped: each sha256 training recorded (``recorded``) becomes that of the uploaded text."""
+    for name, digest in recorded.items():
+        if name in uploaded:
+            code_state = code_state.replace(digest, hashlib.sha256(uploaded[name].encode()).hexdigest())
+    return code_state

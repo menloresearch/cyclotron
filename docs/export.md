@@ -55,6 +55,12 @@ head are baked into the graph.
    can't take a saved setting (an observation term or actuator group it no
    longer has, or a function it can't find), the export stops and names it.
 
+   Training records the sha256 of both files in `code_state.yaml`. If either
+   no longer matches, because it was edited by hand or deleted, the export
+   stops: the files are the record of how the run was trained. Runs trained
+   before the hashes were recorded say so in one line, since edits to them
+   can't be detected.
+
    A run without `env.yaml` or `agent.yaml` (one trained elsewhere, or with
    the file deleted) gets a `[y/N]` question in the terminal: yes writes the
    missing file into the run's `params/` from the current code, with a first

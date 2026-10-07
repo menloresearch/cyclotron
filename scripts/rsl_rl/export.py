@@ -97,10 +97,14 @@ from isaaclab_tasks.utils.parse_cfg import load_cfg_from_registry
 
 import cyclotron.tasks  # noqa: F401
 from cyclotron.code_state import (
+    CODE_STATE_FILE,
+    RUN_CONFIGS,
     check_out_hint,
     code_differences,
     current_code,
+    edited_run_configs,
     load_policy,
+    load_run_configs,
     normalize_config,
     rebuild_differences,
     record_code_state,
@@ -117,14 +121,7 @@ from cyclotron.onnx_export import (
     export_log,
     max_onnx_difference,
 )
-from cyclotron.run_config import (
-    RUN_CONFIGS,
-    generated_run_configs,
-    load_run_configs,
-    mark_generated,
-    missing_run_configs,
-    restore_policy_settings,
-)
+from cyclotron.run_config import generated_run_configs, mark_generated, missing_run_configs, restore_policy_settings
 
 installed_version = metadata.version("rsl-rl-lib")
 
@@ -250,7 +247,21 @@ def main():
     if note:
         log(f"[INFO] {note}")
 
-    # A policy is exported with the env.yaml and agent.yaml it was trained with.
+    # A policy is exported with the env.yaml and agent.yaml it was trained with, as training wrote them.
+    edited = edited_run_configs(run_dir)
+    if edited:
+        log(
+            f"[ERROR] {run_dir}/params/{' and '.join(edited)} changed or went missing since training: it no longer"
+            f" matches the sha256 the run's {CODE_STATE_FILE} recorded. These files are the record of how the run was"
+            " trained, so they are never edited by hand; restore them from a backup or the run's Hub repo, or train a"
+            " new run."
+        )
+        sys.exit(1)
+    if edited is None:
+        log(
+            "[INFO] The run records no sha256 of env.yaml and agent.yaml (it was trained before training recorded them"
+            f" in {CODE_STATE_FILE}), so edits since training can't be detected."
+        )
     not_saved = missing_run_configs(run_dir)
     if not_saved:
         if args_cli.strict:

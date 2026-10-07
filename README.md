@@ -198,7 +198,10 @@ current one. Training therefore writes `params/code_state.yaml` next to
 `env.yaml` and `agent.yaml`: the git commit and branch, a hash of every
 training-code file in the cyclotron package, the Isaac Lab commit, a hash of
 the robot model, and the `isaacsim`, `isaaclab`, `rsl-rl-lib` and `torch`
-versions. It holds hashes, not code.
+versions. It holds hashes, not code. It also records the sha256 of the
+`env.yaml` and `agent.yaml` written next to it: they are the record of how the
+run was trained, so `--export` and `--share` refuse a run whose files no
+longer match (edited by hand, or deleted).
 
 Before loading a checkpoint, export and play compare the run with the current
 code and print what changed:

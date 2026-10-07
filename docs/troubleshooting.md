@@ -70,6 +70,16 @@ exported policy wouldn't be the trained one. That is a bug in the rebuild
 the error name each setting. Until it is fixed, export from a checkout of the
 commit the run was trained with.
 
+### "env.yaml changed or went missing since training"
+
+Training recorded the sha256 of the run's `env.yaml` and `agent.yaml` in
+`code_state.yaml`, and the file no longer matches: it was edited by hand,
+replaced, or deleted. `--export` and `--share` refuse it, since these files are
+the only record of the settings the run was trained with. Restore the
+original (from a backup, or from the run's Hub repo, whose `code_state.yaml`
+records the hashes of its uploaded copies), or train a new run with the
+settings you want.
+
 ### "params has no env.yaml" (`Generate … from the current code? [y/N]`)
 
 The run doesn't have the file every export ships with, so the settings it was

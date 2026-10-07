@@ -13,10 +13,12 @@ import numpy as np
 import torch
 from tensordict import TensorDict
 
+from cyclotron.code_state import CODE_STATE_FILE, RUN_CONFIGS
+
 # The run's training config, copied next to policy.onnx so the export folder has the same files as a shared Hub repo.
-BUNDLE_YAMLS = ("env.yaml", "agent.yaml")
+BUNDLE_YAMLS = RUN_CONFIGS
 # The record of the code the run was trained with; runs trained before it existed don't have one.
-OPTIONAL_BUNDLE_YAMLS = ("code_state.yaml",)
+OPTIONAL_BUNDLE_YAMLS = (CODE_STATE_FILE,)
 
 # Schema of the deploy metadata attached to policy.onnx; firmware should refuse versions it does not know.
 DEPLOY_METADATA_VERSION = "1"

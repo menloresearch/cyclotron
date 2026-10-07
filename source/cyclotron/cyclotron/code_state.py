@@ -1,9 +1,10 @@
 """Record the code a run was trained with, and report what changed before ``--export`` and ``--play`` use the run.
 
 Training writes ``params/code_state.yaml``: the git commit, a hash of every training-code file in the cyclotron
-package, the Isaac Lab commit, a hash of the robot model and the installed package versions. Export and play
-compare the run's saved ``env.yaml``, ``agent.yaml`` and ``code_state.yaml`` with the current code, so a changed
-observation, action or network is reported instead of crashing or silently changing what the policy sees.
+package, the Isaac Lab commit, a hash of the robot model, the installed package versions, and the sha256 of the
+``env.yaml`` and ``agent.yaml`` it wrote next to it, so editing those by hand later shows. Export and play compare the
+run's saved ``env.yaml``, ``agent.yaml`` and ``code_state.yaml`` with the current code, so a changed observation,
+action or network is reported instead of crashing or silently changing what the policy sees.
 
 Plain Python with no Isaac Lab imports, so it can run without Isaac Sim and in tests.
 """
@@ -129,19 +130,59 @@ def write_code_state(params_dir: str, state: dict) -> None:
 # -- Reading the configs Isaac Lab saves ------------------------------------------------------------------------
 
 
+RUN_CONFIGS = ("env.yaml", "agent.yaml")
+
+
 class _ConfigLoader(yaml.SafeLoader):
-    """Reads the yaml Isaac Lab's ``dump_yaml`` writes: tuples become lists, other Python objects (e.g. slices)
-    their tag, so a saved config and the current one compare alike without importing Isaac Lab."""
+    """Reads the yaml Isaac Lab's ``dump_yaml`` writes: tuples and slices are rebuilt; any other Python object is
+    never constructed, since a run can come from another machine, and reads as its tag (``!!python/...``)."""
 
 
 _ConfigLoader.add_constructor(
-    "tag:yaml.org,2002:python/tuple", lambda loader, node: loader.construct_sequence(node, deep=True)
+    "tag:yaml.org,2002:python/tuple", lambda loader, node: tuple(loader.construct_sequence(node, deep=True))
+)
+_ConfigLoader.add_constructor(
+    "tag:yaml.org,2002:python/object/apply:builtins.slice",
+    lambda loader, node: slice(*loader.construct_sequence(node, deep=True)),
 )
 _ConfigLoader.add_multi_constructor("tag:yaml.org,2002:python/", lambda loader, suffix, node: f"!!python/{suffix}")
 
 
 def load_config(text: str) -> dict:
     return yaml.load(text, Loader=_ConfigLoader) or {}
+
+
+def load_run_configs(run_dir: str) -> tuple[dict, dict]:
+    """The run's saved ``params/env.yaml`` and ``params/agent.yaml``; an empty dict for a file it doesn't have."""
+    configs = []
+    for name in RUN_CONFIGS:
+        path = os.path.join(run_dir, "params", name)
+        if os.path.isfile(path):
+            with open(path) as f:
+                configs.append(load_config(f.read()))
+        else:
+            configs.append({})
+    return configs[0], configs[1]
+
+
+def hash_run_configs(params_dir: str) -> dict[str, str]:
+    """The sha256 of the ``env.yaml`` and ``agent.yaml`` in ``params_dir``, which training records in
+    ``code_state.yaml`` so that editing them afterwards shows."""
+    paths = {name: os.path.join(params_dir, name) for name in RUN_CONFIGS}
+    return {name: _sha256(path) for name, path in paths.items() if os.path.isfile(path)}
+
+
+def edited_run_configs(run_dir: str) -> list[str] | None:
+    """Which of the run's ``env.yaml`` and ``agent.yaml`` changed or went missing since training, by the sha256 its
+    ``code_state.yaml`` recorded; None when the run didn't record them (trained before training did)."""
+    path = os.path.join(run_dir, "params", CODE_STATE_FILE)
+    if not os.path.isfile(path):
+        return None
+    with open(path) as f:
+        recorded = (yaml.safe_load(f) or {}).get("run_configs")
+    if not recorded:
+        return None
+    return [name for name, digest in recorded.items() if hash_run_configs(os.path.dirname(path)).get(name) != digest]
 
 
 def normalize_config(config: dict) -> dict:
@@ -166,8 +207,8 @@ def _short_names(value):
         return match.group(1) if match else value
     if isinstance(value, dict):
         return {key: _short_names(item) for key, item in value.items()}
-    if isinstance(value, list):
-        return [_short_names(item) for item in value]
+    if isinstance(value, (list, tuple)):
+        return type(value)(_short_names(item) for item in value)
     return value
 
 
@@ -180,42 +221,56 @@ def _flatten(name: str, value, out: dict) -> None:
         out[name] = value
 
 
-def policy_interface(env: dict, agent: dict) -> dict:
-    """The settings that decide what a run's policy sees and does, as ``{dotted.name: value}``.
+def policy_sections(agent: dict) -> list[tuple[str, bool]]:
+    """Where the settings that decide what a run's policy sees and does live in its configs, as Hydra override paths
+    (``env.actions``), each with whether it holds terms (an observation group or the actions). ``agent`` is the
+    agent config as a dict; it names the actor's observation groups.
 
-    Names are Hydra override paths (``env.actions.joint_pos.scale``). ``env.observations.<group>`` holds the group's
-    term names in order. Critic and AMP inputs, rewards, events, terrain, command ranges and observation noise only
-    shape training, and the play tasks change some of them, so they are left out.
+    Critic and AMP inputs, rewards, events, terrain and command ranges only shape training, and the play tasks change
+    some of them, so they are left out. ``--export`` restores these sections from a run and compares them.
     """
     model = "student" if agent.get("class_name") == "DistillationRunner" else "actor"
     groups = (agent.get("obs_groups") or {}).get(model) or ["policy"]
+    sections = [(f"env.observations.{group}", True) for group in groups] + [("env.actions", True)]
+    paths = ["env.scene.robot.init_state.joint_pos", "env.scene.robot.actuators", "env.sim.dt", "env.decimation"]
+    paths += [f"agent.obs_groups.{model}", f"agent.{model}", "agent.clip_actions"]
+    return sections + [(path, False) for path in paths]
+
+
+def lookup(configs: dict, path: str, default=None):
+    """The value at a dotted ``path`` such as ``env.sim.dt`` in ``{"env": ..., "agent": ...}``, or ``default``."""
+    value = configs
+    for key in path.split("."):
+        if not isinstance(value, dict) or key not in value:
+            return default
+        value = value[key]
+    return value
+
+
+def policy_interface(env: dict, agent: dict) -> dict:
+    """The settings that decide what a run's policy sees and does (``policy_sections``), as ``{dotted.name: value}``.
+
+    Names are Hydra override paths (``env.actions.joint_pos.scale``). ``env.observations.<group>`` holds the group's
+    term names in order. Observation noise is left out too: it only shapes training, and the play tasks turn it off.
+    """
+    configs = {"env": env, "agent": agent}
     out = {}
-    for group in groups:
-        group_cfg = (env.get("observations") or {}).get(group) or {}
-        _flatten(f"env.observations.{group}", group_cfg, out)
-        out[f"env.observations.{group}"] = [
-            name for name, term in group_cfg.items() if isinstance(term, dict) and "func" in term
-        ]
-    robot = (env.get("scene") or {}).get("robot") or {}
-    _flatten("env.actions", env.get("actions"), out)
-    _flatten("env.scene.robot.init_state.joint_pos", (robot.get("init_state") or {}).get("joint_pos"), out)
-    _flatten("env.scene.robot.actuators", robot.get("actuators"), out)
-    out["env.sim.dt"] = (env.get("sim") or {}).get("dt")
-    out["env.decimation"] = env.get("decimation")
-    out[f"agent.obs_groups.{model}"] = groups
-    _flatten(f"agent.{model}", agent.get(model), out)
-    out["agent.clip_actions"] = agent.get("clip_actions")
+    for path, _ in policy_sections(agent):
+        value = lookup(configs, path)
+        _flatten(path, value, out)
+        if path.startswith("env.observations."):
+            out[path] = [name for name, term in (value or {}).items() if isinstance(term, dict) and "func" in term]
     return _short_names(out)
 
 
 def _unset(value) -> bool:
-    return value is None or value == {} or value == []
+    return value is None or value == {} or value == [] or value == ()
 
 
 def _text(value) -> str:
     if value is None:
         return "none"
-    if isinstance(value, list):
+    if isinstance(value, (list, tuple)):
         return "[" + ", ".join(_text(item) for item in value) + "]"
     return str(value)
 
@@ -423,16 +478,12 @@ def describe_changes(run_dir: str, env_cfg: dict, agent_cfg: dict, consequence: 
     training saves them: after the environment is created.
     """
     params = os.path.join(run_dir, "params")
-    paths = [os.path.join(params, name) for name in ("env.yaml", "agent.yaml")]
-    if not all(os.path.isfile(path) for path in paths):
+    if not all(os.path.isfile(os.path.join(params, name)) for name in RUN_CONFIGS):
         return (
             f"[WARNING] {params} has no env.yaml and agent.yaml, so changes since training can't be checked.",
             "warning",
         )
-    saved = []
-    for path in paths:
-        with open(path) as f:
-            saved.append(load_config(f.read()))
+    saved = load_run_configs(run_dir)
     current = normalize_config(env_cfg), normalize_config(agent_cfg)
     errors, settings = interface_differences(policy_interface(*saved), policy_interface(*current))
     code = code_differences(run_dir, record_code_state(current[0]))
@@ -462,11 +513,7 @@ def rebuild_differences(run_dir: str, env_cfg: dict, agent_cfg: dict) -> tuple[l
     ``env_cfg`` and ``agent_cfg`` are the current configs as plain dicts (Isaac Lab's ``class_to_dict``), taken where
     training saves them: after the environment is created.
     """
-    saved = []
-    for name in ("env.yaml", "agent.yaml"):
-        with open(os.path.join(run_dir, "params", name)) as f:
-            saved.append(load_config(f.read()))
-    before = policy_interface(*saved)
+    before = policy_interface(*load_run_configs(run_dir))
     after = policy_interface(normalize_config(env_cfg), normalize_config(agent_cfg))
     mismatches, new = [], []
     for key in dict.fromkeys([*before, *after]):
