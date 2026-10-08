@@ -100,18 +100,25 @@ def robot_model_path(env: dict | None) -> str | None:
     return path if isinstance(path, str) and os.path.isfile(path) else None
 
 
+def _repository_name(remote: str | None) -> str | None:
+    # https://github.com/menloresearch/asimov-1.git or git@github.com:menloresearch/asimov-1 -> menloresearch/asimov-1
+    match = re.search(r"[:/]([^/:]+/[^/:]+?)(?:\.git)?/?$", remote) if remote else None
+    return match.group(1) if match else None
+
+
 def _robot_model_record(robot: str) -> dict:
-    """The robot model file, and where to find it again: its path in the model repository, that repository's commit,
-    and whether the repository had uncommitted changes (the commit alone isn't the model then). The commit, path and
-    dirty flag are None when the file isn't tracked by git."""
+    """The robot model file, and where to find it again: the model repository (``owner/name`` of its origin remote),
+    the file's path in it, that repository's commit, and whether the repository had uncommitted changes (the commit
+    alone isn't the model then). The repository fields are None when the file isn't tracked by git."""
     folder = os.path.dirname(robot)
-    commit = _git_state(robot)["commit"]
-    tracked = commit is not None
+    git = _git_state(robot)
+    tracked = git["commit"] is not None
     return {
         "file": os.path.basename(robot),
+        "repo": _repository_name(git["remote"]),
         "path": _git(folder, "ls-files", "--full-name", "--", os.path.basename(robot)) if tracked else None,
         "sha256": _sha256(robot),
-        "commit": commit,
+        "commit": git["commit"],
         # The whole repository, not just the urdf folder: the meshes the urdf loads sit next to it.
         "dirty": bool(_git(folder, "status", "--porcelain", "--", ":/")) if tracked else None,
     }
@@ -526,7 +533,7 @@ def training_commit(run_dir: str) -> str | None:
 
 
 def training_robot_model(run_dir: str) -> dict | None:
-    """The robot model a run was trained with, as ``code_state.yaml`` recorded it (file, path in the model repository,
+    """The robot model a run was trained with, as ``code_state.yaml`` recorded it (file, model repository, path in it,
     sha256, commit, dirty); None when the run doesn't record one."""
     path = os.path.join(run_dir, "params", CODE_STATE_FILE)
     if not os.path.isfile(path):

@@ -312,10 +312,15 @@ def test_robot_model_records_its_path_commit_and_whether_the_model_repository_is
     (tmp_path / "sim-model" / "assets" / "leg.STL").write_text("mesh")
     git("add", ".")
     git("commit", "-q", "-m", "model")
+    git("remote", "add", "origin", "https://user:token@github.com/menloresearch/asimov-1.git")
     env = {"scene": {"robot": {"spawn": {"asset_path": str(urdf)}}}}
 
     robot = record_code_state(env)["robot_model"]
     assert robot["file"] == "asimov_1.urdf" and robot["path"] == "sim-model/urdf/asimov_1.urdf"
+    # The repository the commit and path belong to, without credentials.
+    assert robot["repo"] == "menloresearch/asimov-1"
+    git("remote", "set-url", "origin", "git@github.com:menloresearch/asimov-1.git")
+    assert record_code_state(env)["robot_model"]["repo"] == "menloresearch/asimov-1"
     assert robot["commit"] == git("rev-parse", "HEAD").strip() and robot["dirty"] is False
 
     # A mesh next to the urdf changed: the commit alone isn't the model.
@@ -329,7 +334,7 @@ def test_robot_model_outside_git_has_no_commit_path_or_dirty_flag(tmp_path):
     env = {"scene": {"robot": {"spawn": {"asset_path": str(urdf)}}}}
     robot = record_code_state(env)["robot_model"]
     assert robot["file"] == "asimov_1.urdf" and robot["sha256"]
-    assert robot["commit"] is None and robot["path"] is None and robot["dirty"] is None
+    assert robot["repo"] is None and robot["commit"] is None and robot["path"] is None and robot["dirty"] is None
 
 
 def test_training_robot_model_reads_the_run_record(tmp_path):

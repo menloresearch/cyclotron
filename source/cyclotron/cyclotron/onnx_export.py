@@ -74,8 +74,10 @@ def deploy_metadata(
     if trained_commit:
         metadata["trained_commit"] = trained_commit
     if robot_model:
-        # The path in the model repository where the commit records it, else just the file name.
-        metadata["robot_model_file"] = robot_model.get("path") or robot_model["file"]
+        # The file in its repository, as owner/name/path (menloresearch/asimov-1/sim-model/urdf/asimov_1.urdf), as
+        # much of that as the run recorded.
+        located = "/".join(part for part in (robot_model.get("repo"), robot_model.get("path")) if part)
+        metadata["robot_model_file"] = located if robot_model.get("path") else robot_model["file"]
         metadata["robot_model_sha256"] = robot_model["sha256"]
         if robot_model.get("commit"):
             metadata["robot_model_commit"] = robot_model["commit"] + ("-dirty" if robot_model.get("dirty") else "")
