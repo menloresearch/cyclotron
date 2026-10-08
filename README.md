@@ -64,6 +64,8 @@ flowchart LR
     Train -->|checkpoint| Play
     Play -->|adjust, retrain| Train
     Train -->|checkpoint| Export
+    Outside[" "] -->|checkpoint| Export
+    style Outside fill:none,stroke:none
     Export -->|exported/ folder| View
     Export --> Share
     Share -->|Hugging Face repo| View

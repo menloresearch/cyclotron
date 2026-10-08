@@ -134,7 +134,13 @@ from cyclotron.onnx_export import (
     max_onnx_difference,
     replace_export,
 )
-from cyclotron.run_config import generated_run_configs, mark_generated, missing_run_configs, restore_policy_settings
+from cyclotron.run_config import (
+    generated_run_configs,
+    mark_generated,
+    missing_run_configs,
+    restore_policy_settings,
+    trained_outside_cyclotron,
+)
 
 installed_version = metadata.version("rsl-rl-lib")
 
@@ -152,6 +158,7 @@ def ask_to_generate(run_dir: str, missing: list[str], log) -> bool:
     log(
         f"  Export can write {files} from the current code ({current_code()}) into params/, marked as generated."
         " The exported policy then gets the current code's settings, which may not be the ones it was trained with."
+        " Only do this from the same codebase and commit the policy was trained with: nothing can verify it."
     )
     try:
         answer = input(f"Generate {files} from the current code? [y/N] ").strip()
@@ -241,6 +248,7 @@ def gather_deploy_metadata(env, policy, run_dir: str, raw_action_clip: float | N
         decimation=env.unwrapped.cfg.decimation,
         observation_names=observation_names,
         trained_commit=training_commit(run_dir),
+        trained_outside_cyclotron=trained_outside_cyclotron(run_dir),
     )
 
 
@@ -302,14 +310,19 @@ def main():
             sys.exit(1)
     generated = generated_run_configs(run_dir)
     if generated:
-        message = (
-            f"{run_dir}/params/{' and '.join(generated)} was written from the code by an earlier --export, not by"
-            " training."
+        # Recorded, not stopped, also with --strict: the file's first line says it was generated, and it is shared
+        # with the policy, so whoever receives it can see where the settings came from.
+        log(
+            f"[WARNING] {run_dir}/params/{' and '.join(generated)} was written from the code by an earlier --export,"
+            " not by training."
         )
-        if args_cli.strict:
-            log(f"[ERROR] Stopped by --strict: {message} --strict only exports the settings a run was trained with.")
-            sys.exit(1)
-        log(f"[WARNING] {message}")
+    if trained_outside_cyclotron(run_dir):
+        log(
+            f"[WARNING] The run has no {CODE_STATE_FILE}, so it was trained outside cyclotron (or before cyclotron"
+            " recorded one), and nothing can check this export against the code it was trained with. Export from the"
+            " same codebase and commit the policy was trained with, as far as possible. The exported policy is tagged"
+            " as trained outside cyclotron."
+        )
 
     problems = restore_policy_settings(env_cfg, agent_cfg, *load_run_configs(run_dir))
     if problems:

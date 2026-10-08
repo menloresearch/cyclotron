@@ -36,10 +36,10 @@ directory itself is not changed.
 ## What `--share` does
 
 1. **Checks the run's settings files.** A run whose `env.yaml` or
-   `agent.yaml` is missing (`Missing files`), was generated from the code by
-   an earlier export, or no longer matches the sha256 its `code_state.yaml`
-   recorded at training, is refused before anything runs, also with `--onnx`:
-   only the settings a run was trained with are published. The uploaded
+   `agent.yaml` is missing (`Missing files`), or no longer matches the sha256
+   its `code_state.yaml` recorded at training, is refused before anything
+   runs, also with `--onnx`. A file generated from the code by an earlier
+   export is published with a warning; its first line says it was generated. The uploaded
    `code_state.yaml` records the sha256 of the uploaded copies, whose local
    paths are reduced to file names.
 2. **Re-exports the checkpoint.** The checkpoint is always exported first

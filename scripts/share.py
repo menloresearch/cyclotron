@@ -6,7 +6,8 @@ policy from a run directory, together with a generated model card. The checkpoin
 checks stop the upload: strict turns export's warnings (code that can change the exported policy changed since
 training, or the code has policy settings the run didn't save) into stops, and a policy.onnx whose
 actions differ from the checkpoint is always one. ``--onnx`` uploads a given file as is instead. A run whose
-``env.yaml`` or ``agent.yaml`` is missing, or was generated from the code by an earlier export, is never uploaded.
+``env.yaml`` or ``agent.yaml`` is missing, or was edited since training, is never uploaded. One generated from the code
+by an earlier export is uploaded with a warning; its first line says it was generated.
 Requires a prior ``hf auth login`` (or ``HF_TOKEN``).
 
 File paths from the training machine are reduced to file names in the uploaded yaml files; the run directory
@@ -126,9 +127,9 @@ def main() -> None:
         sys.exit("[ERROR] Missing files:\n  " + "\n  ".join(missing))
     generated = generated_run_configs(run_dir)
     if generated:
-        sys.exit(
-            f"[ERROR] {run_dir}/params/{' and '.join(generated)} was written from the code by an earlier --export,"
-            " not by training; --share only publishes the settings a run was trained with."
+        print(
+            f"[WARNING] {run_dir}/params/{' and '.join(generated)} was written from the code by an earlier --export,"
+            " not by training. It is uploaded with the line saying so."
         )
     edited = edited_run_configs(run_dir)
     if edited:

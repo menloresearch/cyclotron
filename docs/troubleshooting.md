@@ -91,9 +91,9 @@ from the current code; its first line says it was generated, from which
 commit and when, and every later export of the run warns about it. Only say
 yes if the current code is what the run was trained with. Anything else stops
 the export, as does running without a terminal to answer in. `--strict` stops
-on such a run without asking, and `--share` refuses it before exporting: a run
-missing either file reports `Missing files`, and one with a generated file says
-it was written from the code.
+on such a run without asking, and `--share` refuses it before exporting with
+`Missing files`. Once generated, the file no longer stops either: `--strict`
+and `--share` warn and go on, and the file is uploaded with its first line.
 
 ### "policy.onnx gives different actions than the checkpoint"
 

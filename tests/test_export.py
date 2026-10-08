@@ -185,6 +185,11 @@ def test_deploy_metadata_round_trip_leaves_the_graph_unchanged(tmp_path, trained
     assert read["trained_commit"] == "32aef5c5ec11"
 
 
+def test_deploy_metadata_tags_a_policy_trained_outside_cyclotron():
+    assert "trained_outside_cyclotron" not in sample_metadata()
+    assert sample_metadata(trained_outside_cyclotron=True)["trained_outside_cyclotron"] == "true"
+
+
 def test_deploy_metadata_attach_replaces_earlier_values(tmp_path, trained):
     policy, _ = trained
     path = export(policy, tmp_path)

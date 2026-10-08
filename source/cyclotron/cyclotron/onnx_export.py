@@ -39,6 +39,7 @@ def deploy_metadata(
     decimation: int,
     observation_names: list[str],
     trained_commit: str | None,
+    trained_outside_cyclotron: bool = False,
 ) -> dict[str, str]:
     """The deployment contract of a policy, as the strings stored in ONNX metadata.
 
@@ -70,6 +71,8 @@ def deploy_metadata(
     }
     if trained_commit:
         metadata["trained_commit"] = trained_commit
+    if trained_outside_cyclotron:
+        metadata["trained_outside_cyclotron"] = "true"
     return metadata
 
 

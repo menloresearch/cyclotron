@@ -11,6 +11,7 @@ from cyclotron.run_config import (
     mark_generated,
     missing_run_configs,
     restore_policy_settings,
+    trained_outside_cyclotron,
 )
 
 # Plain dataclasses shaped like the Isaac Lab and rsl_rl configs export restores. Like Isaac Lab's configclass, some
@@ -200,6 +201,14 @@ def test_load_run_configs_rebuilds_tuples_and_slices_but_no_other_python_objects
         {"clip": (-5.0, 5.0), "joint_ids": slice(None)},
         {"seed": "!!python/object/apply:os.getcwd"},
     )
+
+
+def test_a_run_without_code_state_was_trained_outside_cyclotron(tmp_path):
+    params = tmp_path / "params"
+    params.mkdir()
+    assert trained_outside_cyclotron(str(tmp_path))
+    (params / "code_state.yaml").write_text("commit: 32aef5c5ec11\n")
+    assert not trained_outside_cyclotron(str(tmp_path))
 
 
 def test_generated_run_configs_are_found_by_their_first_line(tmp_path):
