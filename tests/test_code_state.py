@@ -245,7 +245,7 @@ def test_compare_code_state_lists_files_dependencies_and_versions(tmp_path):
     (package / "new.py").write_text("")
     current = record_code_state(package=str(package))
     current["packages"]["rsl-rl-lib"] = "9.9.9"
-    current["robot_model"] = {"file": "asimov_1.urdf", "sha256": "abc", "commit": "1234567890"}
+    current["robot_model"] = {"urdf_filepath": "asimov_1.urdf", "sha256": "abc", "commit": "1234567890"}
     assert compare_code_state(saved, current) == [
         "trained on a detached HEAD @ unknown, now a detached HEAD @ unknown",
         "cyclotron files changed: tasks/env_cfg.py",
@@ -292,7 +292,7 @@ def test_code_state_records_the_robot_model_and_no_local_paths(tmp_path):
     state = record_code_state(env, loaded_checkpoint="2026-09-26_base/model_500.pt")
     write_code_state(str(tmp_path / "params"), state)
     text = (tmp_path / "params" / CODE_STATE_FILE).read_text()
-    assert state["robot_model"]["file"] == "asimov_1.urdf" and str(tmp_path) not in text
+    assert state["robot_model"]["urdf_filepath"] == "asimov_1.urdf" and str(tmp_path) not in text
     assert yaml.safe_load(text)["loaded_checkpoint"] == "2026-09-26_base/model_500.pt"
 
 
@@ -316,9 +316,9 @@ def test_robot_model_records_its_path_commit_and_whether_the_model_repository_is
     env = {"scene": {"robot": {"spawn": {"asset_path": str(urdf)}}}}
 
     robot = record_code_state(env)["robot_model"]
-    assert robot["file"] == "asimov_1.urdf" and robot["path"] == "sim-model/urdf/asimov_1.urdf"
-    # The repository the commit and path belong to, without credentials.
-    assert robot["repo"] == "menloresearch/asimov-1"
+    assert set(robot) == {"repo", "urdf_filepath", "sha256", "commit", "dirty"}
+    # The path from the repository's root, and the repository it belongs to, without credentials.
+    assert robot["urdf_filepath"] == "sim-model/urdf/asimov_1.urdf" and robot["repo"] == "menloresearch/asimov-1"
     git("remote", "set-url", "origin", "git@github.com:menloresearch/asimov-1.git")
     assert record_code_state(env)["robot_model"]["repo"] == "menloresearch/asimov-1"
     assert robot["commit"] == git("rev-parse", "HEAD").strip() and robot["dirty"] is False
@@ -328,18 +328,18 @@ def test_robot_model_records_its_path_commit_and_whether_the_model_repository_is
     assert record_code_state(env)["robot_model"]["dirty"] is True
 
 
-def test_robot_model_outside_git_has_no_commit_path_or_dirty_flag(tmp_path):
+def test_robot_model_outside_git_has_only_its_file_name_and_hash(tmp_path):
     urdf = tmp_path / "asimov_1.urdf"
     urdf.write_text("<robot/>")
     env = {"scene": {"robot": {"spawn": {"asset_path": str(urdf)}}}}
     robot = record_code_state(env)["robot_model"]
-    assert robot["file"] == "asimov_1.urdf" and robot["sha256"]
-    assert robot["repo"] is None and robot["commit"] is None and robot["path"] is None and robot["dirty"] is None
+    assert robot["urdf_filepath"] == "asimov_1.urdf" and robot["sha256"]
+    assert robot["repo"] is None and robot["commit"] is None and robot["dirty"] is None
 
 
 def test_training_robot_model_reads_the_run_record(tmp_path):
     assert training_robot_model(str(tmp_path)) is None
-    robot = {"file": "asimov_1.urdf", "path": "urdf/asimov_1.urdf", "sha256": "abc", "commit": "123", "dirty": False}
+    robot = {"repo": "o/r", "urdf_filepath": "urdf/asimov_1.urdf", "sha256": "abc", "commit": "123", "dirty": False}
     write_code_state(str(tmp_path / "params"), {"robot_model": robot})
     assert training_robot_model(str(tmp_path)) == robot
     write_code_state(str(tmp_path / "params"), {"robot_model": None})

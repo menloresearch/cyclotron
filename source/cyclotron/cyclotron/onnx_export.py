@@ -12,7 +12,7 @@ import numpy as np
 import torch
 from tensordict import TensorDict
 
-from cyclotron.code_state import CODE_STATE_FILE, RUN_CONFIGS
+from cyclotron.code_state import CODE_STATE_FILE, RUN_CONFIGS, urdf_filepath
 from cyclotron.hub import checkpoints
 
 # The run's training config, copied next to policy.onnx so the export folder has the same files as a shared Hub repo.
@@ -74,13 +74,16 @@ def deploy_metadata(
     if trained_commit:
         metadata["trained_commit"] = trained_commit
     if robot_model:
-        # The file in its repository, as owner/name/path (menloresearch/asimov-1/sim-model/urdf/asimov_1.urdf), as
-        # much of that as the run recorded.
-        located = "/".join(part for part in (robot_model.get("repo"), robot_model.get("path")) if part)
-        metadata["robot_model_file"] = located if robot_model.get("path") else robot_model["file"]
-        metadata["robot_model_sha256"] = robot_model["sha256"]
-        if robot_model.get("commit"):
-            metadata["robot_model_commit"] = robot_model["commit"] + ("-dirty" if robot_model.get("dirty") else "")
+        # Check out the commit of the repository and hash the urdf there to get the exact model back.
+        fields = {
+            "repo": robot_model.get("repo"),
+            "urdf_filepath": urdf_filepath(robot_model),
+            "sha256": robot_model.get("sha256"),
+            "commit": robot_model.get("commit"),
+        }
+        metadata.update({f"robot_model_{key}": value for key, value in fields.items() if value})
+        if robot_model.get("dirty") is not None:
+            metadata["robot_model_dirty"] = json.dumps(bool(robot_model["dirty"]))
     if trained_outside_cyclotron:
         metadata["trained_outside_cyclotron"] = "true"
     return metadata

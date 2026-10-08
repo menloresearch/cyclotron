@@ -107,21 +107,26 @@ def _repository_name(remote: str | None) -> str | None:
 
 
 def _robot_model_record(robot: str) -> dict:
-    """The robot model file, and where to find it again: the model repository (``owner/name`` of its origin remote),
-    the file's path in it, that repository's commit, and whether the repository had uncommitted changes (the commit
-    alone isn't the model then). The repository fields are None when the file isn't tracked by git."""
-    folder = os.path.dirname(robot)
+    """The robot model, and where to find it again: the model repository (``owner/name`` of its origin remote), the
+    urdf's path from that repository's root, its sha256, the repository's commit, and whether the repository had
+    uncommitted changes (the commit alone isn't the model then). When git doesn't track the urdf, the path is just its
+    file name and the repository fields are None."""
+    folder, name = os.path.split(robot)
     git = _git_state(robot)
     tracked = git["commit"] is not None
     return {
-        "file": os.path.basename(robot),
         "repo": _repository_name(git["remote"]),
-        "path": _git(folder, "ls-files", "--full-name", "--", os.path.basename(robot)) if tracked else None,
+        "urdf_filepath": _git(folder, "ls-files", "--full-name", "--", name) if tracked else name,
         "sha256": _sha256(robot),
         "commit": git["commit"],
         # The whole repository, not just the urdf folder: the meshes the urdf loads sit next to it.
         "dirty": bool(_git(folder, "status", "--porcelain", "--", ":/")) if tracked else None,
     }
+
+
+def urdf_filepath(robot_model: dict) -> str | None:
+    """The urdf a ``robot_model`` record names; runs trained before ``urdf_filepath`` was recorded have ``file``."""
+    return robot_model.get("urdf_filepath") or robot_model.get("file")
 
 
 def record_code_state(env: dict | None = None, loaded_checkpoint: str | None = None, package: str | None = None):
@@ -421,8 +426,8 @@ def compare_code_state(saved: dict, current: dict, files: set[str] | None = None
     robot_before, robot_now = saved.get("robot_model") or {}, current["robot_model"] or {}
     if robot_before.get("sha256") != robot_now.get("sha256"):
         lines.append(
-            f"robot model changed: {robot_before.get('file') or 'unknown'} @ {_short(robot_before.get('commit'))}"
-            f" -> {robot_now.get('file') or 'unknown'} @ {_short(robot_now.get('commit'))}"
+            f"robot model changed: {urdf_filepath(robot_before) or 'unknown'} @ {_short(robot_before.get('commit'))}"
+            f" -> {urdf_filepath(robot_now) or 'unknown'} @ {_short(robot_now.get('commit'))}"
         )
     for name, version in (saved.get("packages") or {}).items():
         if version != current["packages"].get(name):
@@ -533,8 +538,8 @@ def training_commit(run_dir: str) -> str | None:
 
 
 def training_robot_model(run_dir: str) -> dict | None:
-    """The robot model a run was trained with, as ``code_state.yaml`` recorded it (file, model repository, path in it,
-    sha256, commit, dirty); None when the run doesn't record one."""
+    """The robot model a run was trained with, as ``code_state.yaml`` recorded it (repo, urdf_filepath, sha256, commit,
+    dirty); None when the run doesn't record one."""
     path = os.path.join(run_dir, "params", CODE_STATE_FILE)
     if not os.path.isfile(path):
         return None

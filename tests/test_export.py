@@ -186,20 +186,23 @@ def test_deploy_metadata_round_trip_leaves_the_graph_unchanged(tmp_path, trained
 
 
 def test_deploy_metadata_names_the_robot_model_the_run_was_trained_with():
-    robot = {"file": "asimov_1.urdf", "repo": "menloresearch/asimov-1", "path": "sim-model/urdf/asimov_1.urdf"}
-    robot.update(sha256="abc", commit="732cc60")
+    robot = {"repo": "menloresearch/asimov-1", "urdf_filepath": "sim-model/urdf/asimov_1.urdf"}
+    robot.update(sha256="abc", commit="732cc60", dirty=False)
     read = sample_metadata(robot_model=robot)
-    assert read["robot_model_file"] == "menloresearch/asimov-1/sim-model/urdf/asimov_1.urdf"
+    assert read["robot_model_repo"] == "menloresearch/asimov-1"
+    assert read["robot_model_urdf_filepath"] == "sim-model/urdf/asimov_1.urdf"
     assert read["robot_model_sha256"] == "abc"
-    # A repository with no origin remote: the path in it is all there is.
-    no_remote = sample_metadata(robot_model={**robot, "repo": None})
-    assert no_remote["robot_model_file"] == "sim-model/urdf/asimov_1.urdf"
     assert read["robot_model_commit"] == "732cc60"
-    assert sample_metadata(robot_model={**robot, "dirty": True})["robot_model_commit"] == "732cc60-dirty"
-    # Not tracked by git: the file name and hash stay, there is no commit to name.
-    untracked = sample_metadata(robot_model={"file": "asimov_1.urdf", "path": None, "sha256": "abc", "commit": None})
-    assert untracked["robot_model_file"] == "asimov_1.urdf"
-    assert "robot_model_commit" not in untracked
+    assert read["robot_model_dirty"] == "false"
+    assert sample_metadata(robot_model={**robot, "dirty": True})["robot_model_dirty"] == "true"
+    # Not tracked by git: the file name and hash stay, there is no repository, commit or dirty flag to name.
+    untracked = {"repo": None, "urdf_filepath": "asimov_1.urdf", "sha256": "abc", "commit": None, "dirty": None}
+    read = sample_metadata(robot_model=untracked)
+    assert read["robot_model_urdf_filepath"] == "asimov_1.urdf" and read["robot_model_sha256"] == "abc"
+    assert not {"robot_model_repo", "robot_model_commit", "robot_model_dirty"} & set(read)
+    # A run trained before urdf_filepath was recorded names its urdf as file.
+    old = sample_metadata(robot_model={"file": "asimov_1.urdf", "sha256": "abc", "commit": "732cc60"})
+    assert old["robot_model_urdf_filepath"] == "asimov_1.urdf"
     assert not any(key.startswith("robot_model") for key in sample_metadata())
 
 
