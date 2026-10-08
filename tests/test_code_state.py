@@ -308,7 +308,7 @@ def test_robot_model_records_its_path_commit_and_whether_the_model_repository_is
     (tmp_path / "sim-model" / "urdf").mkdir(parents=True)
     (tmp_path / "sim-model" / "assets").mkdir()
     urdf = tmp_path / "sim-model" / "urdf" / "asimov_1.urdf"
-    urdf.write_text("<robot/>")
+    urdf.write_text('<robot name="asimov_1"/>')
     (tmp_path / "sim-model" / "assets" / "leg.STL").write_text("mesh")
     git("add", ".")
     git("commit", "-q", "-m", "model")
@@ -316,7 +316,8 @@ def test_robot_model_records_its_path_commit_and_whether_the_model_repository_is
     env = {"scene": {"robot": {"spawn": {"asset_path": str(urdf)}}}}
 
     robot = record_code_state(env)["robot_model"]
-    assert set(robot) == {"repo", "urdf_filepath", "sha256", "commit", "dirty"}
+    assert set(robot) == {"name", "repo", "urdf_filepath", "sha256", "commit", "dirty"}
+    assert robot["name"] == "asimov_1"
     # The path from the repository's root, and the repository it belongs to, without credentials.
     assert robot["urdf_filepath"] == "sim-model/urdf/asimov_1.urdf" and robot["repo"] == "menloresearch/asimov-1"
     git("remote", "set-url", "origin", "git@github.com:menloresearch/asimov-1.git")
@@ -335,11 +336,16 @@ def test_robot_model_outside_git_has_only_its_file_name_and_hash(tmp_path):
     robot = record_code_state(env)["robot_model"]
     assert robot["urdf_filepath"] == "asimov_1.urdf" and robot["sha256"]
     assert robot["repo"] is None and robot["commit"] is None and robot["dirty"] is None
+    # <robot/> has no name; a file that isn't xml has none either.
+    assert robot["name"] is None
+    urdf.write_text("not xml")
+    assert record_code_state(env)["robot_model"]["name"] is None
 
 
 def test_training_robot_model_reads_the_run_record(tmp_path):
     assert training_robot_model(str(tmp_path)) is None
-    robot = {"repo": "o/r", "urdf_filepath": "urdf/asimov_1.urdf", "sha256": "abc", "commit": "123", "dirty": False}
+    robot = {"name": "asimov_1", "repo": "o/r", "urdf_filepath": "urdf/asimov_1.urdf"}
+    robot.update(sha256="abc", commit="123", dirty=False)
     write_code_state(str(tmp_path / "params"), {"robot_model": robot})
     assert training_robot_model(str(tmp_path)) == robot
     write_code_state(str(tmp_path / "params"), {"robot_model": None})

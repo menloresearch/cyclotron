@@ -76,6 +76,7 @@ def deploy_metadata(
     if robot_model:
         # Check out the commit of the repository and hash the urdf there to get the exact model back.
         fields = {
+            "name": robot_model.get("name"),
             "repo": robot_model.get("repo"),
             "urdf_filepath": urdf_filepath(robot_model),
             "sha256": robot_model.get("sha256"),

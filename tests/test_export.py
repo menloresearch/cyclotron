@@ -186,9 +186,10 @@ def test_deploy_metadata_round_trip_leaves_the_graph_unchanged(tmp_path, trained
 
 
 def test_deploy_metadata_names_the_robot_model_the_run_was_trained_with():
-    robot = {"repo": "menloresearch/asimov-1", "urdf_filepath": "sim-model/urdf/asimov_1.urdf"}
+    robot = {"name": "asimov_1", "repo": "menloresearch/asimov-1", "urdf_filepath": "sim-model/urdf/asimov_1.urdf"}
     robot.update(sha256="abc", commit="732cc60", dirty=False)
     read = sample_metadata(robot_model=robot)
+    assert read["robot_model_name"] == "asimov_1"
     assert read["robot_model_repo"] == "menloresearch/asimov-1"
     assert read["robot_model_urdf_filepath"] == "sim-model/urdf/asimov_1.urdf"
     assert read["robot_model_sha256"] == "abc"
@@ -199,7 +200,7 @@ def test_deploy_metadata_names_the_robot_model_the_run_was_trained_with():
     untracked = {"repo": None, "urdf_filepath": "asimov_1.urdf", "sha256": "abc", "commit": None, "dirty": None}
     read = sample_metadata(robot_model=untracked)
     assert read["robot_model_urdf_filepath"] == "asimov_1.urdf" and read["robot_model_sha256"] == "abc"
-    assert not {"robot_model_repo", "robot_model_commit", "robot_model_dirty"} & set(read)
+    assert not {"robot_model_name", "robot_model_repo", "robot_model_commit", "robot_model_dirty"} & set(read)
     # A run trained before urdf_filepath was recorded names its urdf as file.
     old = sample_metadata(robot_model={"file": "asimov_1.urdf", "sha256": "abc", "commit": "732cc60"})
     assert old["robot_model_urdf_filepath"] == "asimov_1.urdf"

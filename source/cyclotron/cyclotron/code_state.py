@@ -19,6 +19,7 @@ import os
 import re
 import subprocess
 from collections import Counter
+from xml.etree import ElementTree
 
 import yaml
 
@@ -106,15 +107,24 @@ def _repository_name(remote: str | None) -> str | None:
     return match.group(1) if match else None
 
 
+def _urdf_robot_name(urdf: str) -> str | None:
+    """The ``name`` of the urdf's ``<robot>`` element, or None when the file isn't a urdf with one."""
+    try:
+        return ElementTree.parse(urdf).getroot().get("name")
+    except (OSError, ElementTree.ParseError):
+        return None
+
+
 def _robot_model_record(robot: str) -> dict:
-    """The robot model, and where to find it again: the model repository (``owner/name`` of its origin remote), the
-    urdf's path from that repository's root, its sha256, the repository's commit, and whether the repository had
-    uncommitted changes (the commit alone isn't the model then). When git doesn't track the urdf, the path is just its
-    file name and the repository fields are None."""
+    """The robot model, and where to find it again: the robot's name from the urdf, the model repository
+    (``owner/name`` of its origin remote), the urdf's path from that repository's root, its sha256, the repository's
+    commit, and whether the repository had uncommitted changes (the commit alone isn't the model then). When git
+    doesn't track the urdf, the path is just its file name and the repository fields are None."""
     folder, name = os.path.split(robot)
     git = _git_state(robot)
     tracked = git["commit"] is not None
     return {
+        "name": _urdf_robot_name(robot),
         "repo": _repository_name(git["remote"]),
         "urdf_filepath": _git(folder, "ls-files", "--full-name", "--", name) if tracked else name,
         "sha256": _sha256(robot),
