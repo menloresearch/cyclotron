@@ -40,76 +40,143 @@ head are baked into the graph.
    for runs trained here: the task is read from the run's `agent.yaml`.
    Otherwise pass `--task`, and pick the checkpoint like `--play` does
    (`--load_run`, `--experiment_name`, or the latest run by default).
-2. **Rebuilds the run's policy settings.** Like a restart of the run, it sets
-   what the policy sees and does back to the values in the run's `env.yaml` and
-   `agent.yaml` before building the environment: the actor's observation terms
-   (functions, scales, clipping, history), the actions, the robot's default
-   pose and actuators, `sim.dt`, decimation and the actor network (an LSTM run
-   exports as an LSTM even if the task now trains an MLP). The policy and its
-   deploy metadata therefore describe the run as it was trained, whatever the
-   task's config says today. The two files are the only source of these
-   settings: export doesn't run Hydra, and refuses setting overrides
-   (`env.…=`, `agent.…=`) before Isaac Sim starts. Everything else (rewards,
-   terrain, events, commands, the robot model file) stays as the code has it:
-   it only shapes training, or depends on the machine. If the current code
-   can't take a saved setting (an observation term or actuator group it no
-   longer has, or a function it can't find), the export stops and names it.
-
-   Training records the sha256 of both files in `code_state.yaml`. If either
-   no longer matches, because it was edited by hand or deleted, the export
-   stops: the files are the record of how the run was trained. Runs trained
-   before the hashes were recorded say so in one line, since edits to them
-   can't be detected.
-
-   A run without `env.yaml` or `agent.yaml` (one trained elsewhere, or with
-   the file deleted) gets a `[y/N]` question in the terminal: yes writes the
-   missing file into the run's `params/` from the current code, with a first
-   line saying it was generated, from which commit and when; no, or no answer,
-   stops the export. Later exports of that run warn that the file came from
-   the code, and `--strict` (so `--share`) stops on such a run instead of
-   asking.
-3. **Checks the rebuilt settings against the run.** Once the environment is
-   built, it compares the policy settings with the run's `env.yaml` and
-   `agent.yaml` again. Any difference means the rebuild failed and stops the
-   export. A setting the current code has but the run didn't save (added since
-   training) keeps the code's value and is listed as a warning; `--strict`
-   stops on it, since it doesn't come from the run.
-4. **Reports changes to the code behind the settings.** It compares the run's
-   `code_state.yaml` (or rsl_rl's `git/` records) with the code you have
-   checked out, but only what can change the exported policy: the cyclotron
-   files that define the functions and classes the policy settings name (the
-   file a function is defined in, not helpers it imports), the robot model,
-   Isaac Lab's commit and the `isaacsim`, `isaaclab`, `rsl-rl-lib` and `torch`
-   versions. Rewards, the training algorithm, configs and docs can't change an
-   export and aren't listed (`--play` still lists them; see
-   [Code changes since training](../README.md#code-changes-since-training)).
-   Changes are warnings, with the commit to check out for the exact training
-   code; `--strict` turns them into a stop. Export doesn't rebuild the
-   training code itself: Isaac Lab and rsl_rl are installed packages a
-   checkout can't bring back, so it names what changed and leaves the call to
-   you.
-5. **Loads only the actor.** The critic, the AMP discriminator and the
-   optimizer are training-only state, so a run whose critic no longer matches
-   the current code still exports. A checkpoint whose weights don't fit the
-   network built from the run's settings, for example because an observation
-   function now returns more values, stops the export.
-6. **Exports and bundles.** Writes `policy.onnx` and `policy.pt` with rsl_rl's
+2. **Rebuilds the run's policy settings,** like a restart of the run. It loads
+   the task's config, then sets what the policy sees and does back to the
+   values in the run's `env.yaml` and `agent.yaml`: the actor's observation
+   terms (functions, scales, clipping, history), the actions, the robot's
+   default pose and actuators, `sim.dt`, decimation and the actor network (an
+   LSTM run exports as an LSTM even if the task now trains an MLP). The two
+   files are the only source of these settings; nothing on the command line
+   changes them. Everything else (rewards, terrain, events, commands, the
+   robot model file) stays as the code has it: it only shapes training, or
+   depends on the machine. Then it builds a one-robot environment.
+3. **Loads only the actor** from the checkpoint. The critic, the AMP
+   discriminator and the optimizer are training-only state, so a run whose
+   critic no longer matches the current code still exports.
+4. **Exports and bundles.** Writes `policy.onnx` and `policy.pt` with rsl_rl's
    exporter and copies the run's yaml files next to them.
-7. **Attaches the deploy metadata** described below to `policy.onnx`.
-8. **Checks the export.** Feeds the same observations to the checkpoint and to
-   `policy.onnx` (as attached, through onnxruntime) and fails if any action
-   differs by more than 1e-4, which would mean a broken export, for example a
-   dropped observation normalizer. A recurrent policy (LSTM or GRU) is run for
-   3 steps from an empty memory on both sides, the ONNX file getting zeros as
-   `h_in`/`c_in` and then its own `h_out`/`c_out` back, as a robot runtime
-   does; the memory it returns is compared too. One step would not be enough:
-   from an empty memory, the weights that carry memory between steps multiply
-   zeros.
+5. **Attaches the deploy metadata** described below to `policy.onnx`.
+6. **Checks the export** against the checkpoint.
+
+Every check along the way is listed in the next section, in the order it runs.
+
+## Checks, step by step
+
+Each check either **stops** the export, **asks** in the terminal, **warns**
+and carries on, or just **notes** something. `--strict` turns the warnings it
+names into stops; [`--share`](share.md) always exports with `--strict`. From
+step 5 on, every message is also appended to `export.log` in the output
+folder.
+
+### Before Isaac Sim starts
+
+These take a second, so a typo doesn't cost an Isaac Sim launch.
+
+1. **No extra arguments.** Stops on anything `--export` doesn't take,
+   including setting overrides such as `env.actions.joint_pos.scale=0.3`: the
+   run's `env.yaml` and `agent.yaml` are the only source of its settings.
+   `--export takes no setting overrides or other extra arguments (…)`
+2. **The checkpoint exists.** Stops on a `--checkpoint` path that isn't a
+   file (`Checkpoint not found: …`), or a bare filename without `--load_run`
+   (`--checkpoint '…' is not a path. …`).
+3. **The task is known.** Taken from `--task`, else from the experiment name
+   in the run's `agent.yaml`, else from `--experiment_name`. Stops when none
+   names a known task: `Cannot infer the task: …/agent.yaml not found. Pass it
+   with --task.`, `Cannot infer the task for experiment '…'. Pass it with
+   --task.` or `Pass --task, or a full --checkpoint path …`
+
+### Before building the environment
+
+4. **A run and checkpoint match.** Without a full `--checkpoint` path, Isaac
+   Lab looks up `--load_run` (or the latest run) in the experiment folder and
+   stops with its own error if there is none, or no checkpoint in it.
+5. **What gets overwritten.** Notes it when the output folder already holds
+   an export: `Overwriting the run's existing export.`, or `Overwriting an
+   export made before model_….pt was written, …` when that export wasn't of
+   the run's latest checkpoint.
+6. **`env.yaml` and `agent.yaml` are as training wrote them.** Training
+   records their sha256 in `code_state.yaml`. Stops if either no longer
+   matches, because it was edited by hand or deleted: `…/params/env.yaml
+   changed or went missing since training: …`. Runs trained before the hashes
+   were recorded get a note instead: `The run records no sha256 of env.yaml
+   and agent.yaml …`
+7. **`env.yaml` and `agent.yaml` exist.** Asks when one is missing (a run
+   trained elsewhere, or a file deleted from a run without recorded hashes):
+   `Generate env.yaml from the current code? [y/N]`. Yes writes it into the
+   run's `params/` from the current code, with a first line saying it was
+   generated, from which commit and when. No, no answer, or no terminal to
+   answer in stops: `Stopped: a policy is exported with its env.yaml and
+   agent.yaml, and this run has no …`. **`--strict` stops without asking.**
+8. **They weren't generated by an earlier export.** Warns when a file starts
+   with that generated line: `…/params/env.yaml was written from the code by
+   an earlier --export, not by training.` **`--strict` stops.**
+9. **The current code can hold every saved setting.** Stops when it can't,
+   one line per setting: an observation term, actuator group or config field
+   the code no longer has; a function it can't import under the saved name
+   (a function that only moved, for example from the old package name
+   `isaac_asimov`, is found by its name); a network class it doesn't have; or
+   a Python object it won't read back from the yaml. `The current code can't
+   rebuild the policy settings this run was trained with:`, then the commit to
+   check out.
+
+### After building the environment
+
+10. **The rebuilt settings match the run.** Compares the policy settings of
+    the built environment with `env.yaml` and `agent.yaml`. Stops on any
+    difference, which means the rebuild went wrong: `The rebuilt policy
+    settings don't match the run's env.yaml and agent.yaml:`. Notes `Checked
+    the rebuilt policy settings against the run's env.yaml and agent.yaml:
+    they match.` otherwise. Warns about settings the current code has but the
+    run didn't save (added since training), which keep the code's value: `The
+    current code has policy settings the run didn't save; …`. **`--strict`
+    stops on those.**
+11. **The code behind the settings is unchanged.** Compares the run's
+    `code_state.yaml` with the code you have checked out, limited to what can
+    change the exported policy: the cyclotron files that define the functions
+    and classes the policy settings name (the file a function is defined in,
+    not helpers it imports), the robot model, Isaac Lab's commit and the
+    `isaacsim`, `isaaclab`, `rsl-rl-lib` and `torch` versions. Runs trained
+    before `code_state.yaml` existed are compared with the commits rsl_rl
+    logged in their `git/` folder instead, which can only list changed files,
+    or say they "can't be listed" when the commit isn't in this clone. Warns
+    with each change and the commit to check out for the exact training code:
+    `Code behind the policy settings changed since this run was trained:`.
+    **`--strict` stops.** Rewards, the training algorithm, configs and docs
+    can't change an export and aren't compared; `--play` still lists them (see
+    [Code changes since training](../README.md#code-changes-since-training)).
+12. **The checkpoint fits the network.** Stops when the actor's weights don't
+    fit the network built from the run's settings, naming each layer and
+    size, for example when an observation function now returns more values:
+    `The checkpoint's policy doesn't fit the network the current code builds:`.
+
+### After writing the files
+
+13. **The deploy metadata can describe the actions.** For a direct-workflow
+    environment, or an action term that isn't a joint action, warns and
+    writes `policy.onnx` without metadata rather than a wrong contract:
+    `… not attaching deploy metadata.`
+14. **`policy.onnx` gives the checkpoint's actions.** Feeds the same 64
+    observations (the environment's first one and 63 noisy copies) to the
+    checkpoint and to `policy.onnx` as written, through onnxruntime. A
+    recurrent policy (LSTM or GRU) runs 3 steps from an empty memory on both
+    sides, the file getting zeros as `h_in`/`c_in` and then its own
+    `h_out`/`c_out` back, as a robot runtime does, and the memory it returns
+    is compared too; one step would not do, since from an empty memory the
+    weights that carry memory between steps multiply zeros. The PyTorch side
+    runs in full float32, like onnxruntime. Stops when anything differs by
+    more than 1e-4, which means a broken export, for example a dropped
+    observation normalizer: `policy.onnx gives different actions than the
+    checkpoint (…)`. The files are already written at that point; don't use
+    them. Notes `Checked policy.onnx against the checkpoint (…): max
+    difference …` otherwise.
+
+The export ends with a summary: the files written, and a reminder of any
+warnings above.
 
 rsl_rl's own exporter checks nothing: it traces the actor once on zero inputs
 and writes the file. Every check above, and the deploy metadata, are
 cyclotron's; rsl_rl's only safeguard is PyTorch's strict weight loading, which
-step 5 turns into a message naming the layers and sizes that don't fit.
+step 12 turns into a message naming the layers and sizes that don't fit.
 
 ## Options
 
@@ -120,7 +187,7 @@ step 5 turns into a message naming the layers and sizes that don't fit.
 | `--load_run` | Run folder to export from. Defaults to the latest. |
 | `--experiment_name` | Experiment folder under `logs/rsl_rl/`. Defaults to the task's. |
 | `--output` | Folder to write to. Defaults to `<checkpoint folder>/exported`. |
-| `--strict` | Stop, instead of warning, if code that can change the exported policy changed since the run was trained (step 4) or the code has policy settings the run didn't save, and stop instead of asking when the run has no `env.yaml` or `agent.yaml` (or has one an earlier export generated). |
+| `--strict` | Stop instead of asking or warning in [checks](#checks-step-by-step) 7, 8, 10 and 11: a missing or generated `env.yaml`/`agent.yaml`, policy settings the run didn't save, and changes to the code behind the settings. |
 | `--device` | Device to run the export on (an AppLauncher flag; the export always runs headless). |
 
 Nothing else is accepted: setting overrides such as `env.actions.joint_pos.scale=0.3` are refused, since the run's

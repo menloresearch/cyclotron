@@ -183,12 +183,12 @@ def _configured_offset(term) -> list[float]:
     return [pose[int(i)] for i in joint_ids]
 
 
-def gather_deploy_metadata(env, policy, run_dir: str) -> dict[str, str] | None:
+def gather_deploy_metadata(env, policy, run_dir: str, log) -> dict[str, str] | None:
     """Resolve the deployment contract from the live environment, or None (with a message) if an action term
     is not a joint action and the contract cannot describe it."""
     manager = getattr(env.unwrapped, "action_manager", None)
     if manager is None:
-        print("[WARNING] The environment has no action manager (direct workflow); not attaching deploy metadata.")
+        log("[WARNING] The environment has no action manager (direct workflow); not attaching deploy metadata.")
         return None
     joint_names, scale, offset, clip, stiffness, damping = [], [], [], [], [], []
     clipped = False
@@ -196,7 +196,7 @@ def gather_deploy_metadata(env, policy, run_dir: str) -> dict[str, str] | None:
         term = manager.get_term(name)
         names = getattr(term, "_joint_names", None)
         if names is None:
-            print(f"[WARNING] Action term {name} is not a joint action; not attaching deploy metadata.")
+            log(f"[WARNING] Action term {name} is not a joint action; not attaching deploy metadata.")
             return None
         joint_names += list(names)
         scale += _per_joint(term._scale, len(names))
@@ -374,7 +374,7 @@ def main():
     for name in missing:
         log(f"[WARNING] {run_dir}/params/{name} not found; the viewer and --share need it next to policy.onnx.")
 
-    metadata = gather_deploy_metadata(env, policy, run_dir)
+    metadata = gather_deploy_metadata(env, policy, run_dir, log)
     if metadata is not None:
         attach_deploy_metadata(os.path.join(output_dir, "policy.onnx"), metadata)
         log(f"[INFO] Attached deploy metadata to policy.onnx: {', '.join(metadata)}, obs_dim, action_dim.")
