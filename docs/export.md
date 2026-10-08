@@ -74,13 +74,20 @@ head are baked into the graph.
    export. A setting the current code has but the run didn't save (added since
    training) keeps the code's value and is listed as a warning; `--strict`
    stops on it, since it doesn't come from the run.
-4. **Reports code changes since training.** It compares the run's
+4. **Reports changes to the code behind the settings.** It compares the run's
    `code_state.yaml` (or rsl_rl's `git/` records) with the code you have
-   checked out; see
-   [Code changes since training](../README.md#code-changes-since-training).
-   With the settings rebuilt, this is about the code behind them: the
-   observation and action functions, the robot model and the library
-   versions. Changes are warnings (`--strict` turns them into a stop).
+   checked out, but only what can change the exported policy: the cyclotron
+   files that define the functions and classes the policy settings name (the
+   file a function is defined in, not helpers it imports), the robot model,
+   Isaac Lab's commit and the `isaacsim`, `isaaclab`, `rsl-rl-lib` and `torch`
+   versions. Rewards, the training algorithm, configs and docs can't change an
+   export and aren't listed (`--play` still lists them; see
+   [Code changes since training](../README.md#code-changes-since-training)).
+   Changes are warnings, with the commit to check out for the exact training
+   code; `--strict` turns them into a stop. Export doesn't rebuild the
+   training code itself: Isaac Lab and rsl_rl are installed packages a
+   checkout can't bring back, so it names what changed and leaves the call to
+   you.
 5. **Loads only the actor.** The critic, the AMP discriminator and the
    optimizer are training-only state, so a run whose critic no longer matches
    the current code still exports. A checkpoint whose weights don't fit the
@@ -113,7 +120,7 @@ step 5 turns into a message naming the layers and sizes that don't fit.
 | `--load_run` | Run folder to export from. Defaults to the latest. |
 | `--experiment_name` | Experiment folder under `logs/rsl_rl/`. Defaults to the task's. |
 | `--output` | Folder to write to. Defaults to `<checkpoint folder>/exported`. |
-| `--strict` | Stop, instead of warning, if the code changed since the run was trained or has policy settings the run didn't save, and stop instead of asking when the run has no `env.yaml` or `agent.yaml` (or has one an earlier export generated). |
+| `--strict` | Stop, instead of warning, if code that can change the exported policy changed since the run was trained (step 4) or the code has policy settings the run didn't save, and stop instead of asking when the run has no `env.yaml` or `agent.yaml` (or has one an earlier export generated). |
 | `--device` | Device to run the export on (an AppLauncher flag; the export always runs headless). |
 
 Nothing else is accepted: setting overrides such as `env.actions.joint_pos.scale=0.3` are refused, since the run's

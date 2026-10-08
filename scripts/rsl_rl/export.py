@@ -4,8 +4,9 @@ Writes ``policy.onnx``, a TorchScript ``policy.pt`` and copies of the run's ``en
 ``code_state.yaml``, so the folder holds the same files as a policy shared on the Hugging Face Hub. Runs Isaac Sim
 headless with one environment to build the policy, like a restart of the run: the policy settings are set back to
 the ones the run saved in its ``env.yaml`` and ``agent.yaml``, which are their only source (no overrides), and are
-checked against those files once the environment is built. Warns if the code changed since the run was trained,
-loads only the policy from the checkpoint, then checks that the ONNX file gives the same actions as the PyTorch
+checked against those files once the environment is built. Warns if code that can change the exported policy (the
+package files behind the policy settings, the robot model, Isaac Lab, library versions) changed since the run was
+trained, loads only the policy from the checkpoint, then checks that the ONNX file gives the same actions as the PyTorch
 policy. A run without ``env.yaml`` or ``agent.yaml`` can have them written from the current code, if you agree.
 """
 
@@ -43,7 +44,10 @@ parser.add_argument(
     "--output", type=str, default=None, help="Folder to write to. Defaults to <checkpoint folder>/exported."
 )
 parser.add_argument(
-    "--strict", action="store_true", help="Stop, instead of warning, if the code changed since the run was trained."
+    "--strict",
+    action="store_true",
+    help="Stop, instead of warning, if code that can change the exported policy changed since the run was trained,"
+    " or anything else doesn't come from the run.",
 )
 AppLauncher.add_app_launcher_args(parser)
 args_cli, unknown_args = parser.parse_known_args()
@@ -106,6 +110,7 @@ from cyclotron.code_state import (
     load_policy,
     load_run_configs,
     normalize_config,
+    policy_code_files,
     rebuild_differences,
     record_code_state,
     training_commit,
@@ -126,8 +131,9 @@ from cyclotron.run_config import generated_run_configs, mark_generated, missing_
 installed_version = metadata.version("rsl-rl-lib")
 
 CODE_CHANGE_CONSEQUENCE = (
-    "The policy settings come from the run's env.yaml and agent.yaml, but the code behind them (observation and"
-    " action functions, the robot model) is the current code."
+    "The policy settings come from the run's env.yaml and agent.yaml, but the code behind them is the current code."
+    " Only code that can change the exported policy is listed: the package files defining the functions the policy"
+    " settings name, the robot model, Isaac Lab and the library versions."
 )
 
 
@@ -328,14 +334,17 @@ def main():
             log("[ERROR] Stopped by --strict: these settings don't come from the run (see above).")
             env.close()
             sys.exit(1)
-    code = code_differences(run_dir, record_code_state(normalize_config(env_dict)))
+    # Rewards, the training algorithm and the like can't change what is exported, so they aren't compared here.
+    behind_settings = policy_code_files(*load_run_configs(run_dir))
+    code = code_differences(run_dir, record_code_state(normalize_config(env_dict)), behind_settings)
     if code:
-        log("[WARNING] The code has changed since this run was trained:")
+        log("[WARNING] Code behind the policy settings changed since this run was trained:")
         for line in code:
             log(f"    {line}")
         log(f"  {CODE_CHANGE_CONSEQUENCE}")
+        log(f"  For the exact training code: {check_out_hint(run_dir)}")
         if args_cli.strict:
-            log("[ERROR] Stopped by --strict: the code changed since the run was trained (see above).")
+            log("[ERROR] Stopped by --strict: code behind the policy settings changed since training (see above).")
             env.close()
             sys.exit(1)
     if isinstance(env.unwrapped, DirectMARLEnv):
@@ -381,7 +390,7 @@ def main():
     if not_saved or generated:
         log(f"[WARNING] {' and '.join(not_saved or generated)} came from the current code, not from training.")
     if code or new:
-        log("[WARNING] The code changed since this run was trained; see the warnings before the export.")
+        log("[WARNING] Code behind the policy settings changed since training; see the warnings before the export.")
     # Isaac Sim replaces sys.exit with a version that only takes an exit code, so the message is printed first.
     if difference > ONNX_TOLERANCE:
         log(

@@ -3,7 +3,8 @@
 Uploads ``params/agent.yaml``, ``params/env.yaml``, ``params/code_state.yaml`` (for runs that have one) and the
 policy from a run directory, together with a generated model card. The checkpoint is always exported first with
 ``export.py --strict``, so an ``exported/policy.onnx`` of unknown vintage is never published and export's own
-checks stop the upload: strict turns the code-changed-since-training warning into a stop, and a policy.onnx whose
+checks stop the upload: strict turns export's warnings (code that can change the exported policy changed since
+training, or the code has policy settings the run didn't save) into stops, and a policy.onnx whose
 actions differ from the checkpoint is always one. ``--onnx`` uploads a given file as is instead. A run whose
 ``env.yaml`` or ``agent.yaml`` is missing, or was generated from the code by an earlier export, is never uploaded.
 Requires a prior ``hf auth login`` (or ``HF_TOKEN``).
@@ -103,7 +104,7 @@ def resolve_checkpoint(run_dir: str, checkpoint: str) -> str:
 
 def export_onnx(checkpoint: str, task: str) -> None:
     print(f"[INFO] Exporting {checkpoint} to ONNX using task {task}")
-    # Sharing publishes the policy, so --strict turns the code-changed warning --export alone prints into a stop.
+    # Sharing publishes the policy, so --strict turns the warnings --export alone prints into stops.
     command = [sys.executable, EXPORT_SCRIPT, "--task", task, "--checkpoint", checkpoint, "--strict"]
     if subprocess.run(command).returncode != 0:
         sys.exit("[ERROR] ONNX export failed.")

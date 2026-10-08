@@ -45,8 +45,9 @@ directory itself is not changed.
 2. **Re-exports the checkpoint.** The checkpoint is always exported first
    through [`--export`](export.md) with `--strict`; a pre-existing
    `exported/policy.onnx` of unknown vintage is never uploaded. Strict turns
-   the warnings `--export` alone prints (the code changed since training, or
-   has policy settings the run didn't save) into stops. A `policy.onnx` whose
+   the warnings `--export` alone prints (code that can change the exported
+   policy changed since training, or the code has policy settings the run
+   didn't save) into stops. A `policy.onnx` whose
    actions differ from the checkpoint is always a stop. `--onnx <file>` is the
    only way to upload an existing ONNX file as is.
 3. **Generates the model card** from `--title` and `--summary`.

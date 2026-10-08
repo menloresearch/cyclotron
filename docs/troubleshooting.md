@@ -37,11 +37,14 @@ Training saves a checkpoint and prints the resume command when interrupted.
 pass `--task <id>` by hand, or add the entry — step 5 of
 [Designing your own task](designing-your-own-task.md).
 
-### "Stopped by --strict: the code changed since the run was trained"
+### "Stopped by --strict: the code changed since the run was trained" (or "code behind the policy settings changed")
 
 Not a malfunction: the checkout differs from the code that trained the run,
 and strict mode (`--share` always, `--export`/`--play` with `--strict`)
-refuses to continue. The message above the stop names each difference, and
+refuses to continue. `--export` only stops on code that can change the
+exported policy (the files defining the functions the policy settings name,
+the robot model, Isaac Lab, package versions); `--play` stops on any training
+code. The message above the stop names each difference, and
 `code_state.yaml` names the trained commit. Check that commit out (a separate
 worktree works well) and re-run, or decide the changes are harmless and run
 without `--strict`. For `--play`, changed policy settings can also be passed

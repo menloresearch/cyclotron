@@ -342,8 +342,46 @@ def _listing(names: list[str], limit: int = 8) -> str:
     return shown + (f" and {len(names) - limit} more" if len(names) > limit else "")
 
 
-def compare_code_state(saved: dict, current: dict) -> list[str]:
-    """Describe, one line each, how the current code differs from a run's ``code_state.yaml``."""
+def policy_code_files(env: dict, agent: dict) -> set[str]:
+    """The package files, named as ``code_state.yaml`` names them (``tasks/locomotion/mdp/observations.py``), that
+    define the functions and classes a run's policy settings (``policy_sections``) name: the package's code behind
+    what the policy sees and does. Functions from other packages, such as Isaac Lab's, come with that package's
+    version; helpers these files import aren't followed.
+
+    A module of a package that is no longer installed, such as this package's old name ``isaac_asimov``, counts as
+    this package's, by its path inside it.
+    """
+    package = os.path.basename(package_dir())
+    files = set()
+
+    def visit(value) -> None:
+        if isinstance(value, str) and _FUNCTION.fullmatch(value):
+            top, *path = value.split(":")[0].split(".")
+            if top == package or importlib.util.find_spec(top) is None:
+                files.add("/".join([*path, "__init__.py"]))
+                if path:
+                    files.add("/".join(path) + ".py")
+        elif isinstance(value, dict):
+            for key, item in value.items():
+                if key not in _IGNORED_KEYS:
+                    visit(item)
+        elif isinstance(value, (list, tuple)):
+            for item in value:
+                visit(item)
+
+    for path, _ in policy_sections(agent):
+        visit(lookup({"env": env, "agent": agent}, path))
+    return files
+
+
+def _among(path: str, files: set[str] | None) -> bool:
+    """Whether a package file (``tasks/x.py``, or a repo path ending in it) is one of ``files``; None is all."""
+    return files is None or path in files or any(path.endswith(f"/{name}") for name in files)
+
+
+def compare_code_state(saved: dict, current: dict, files: set[str] | None = None) -> list[str]:
+    """Describe, one line each, how the current code differs from a run's ``code_state.yaml``. ``files`` limits the
+    package files compared to those (``policy_code_files``); the rest is always compared."""
     lines = []
     trained, now = saved.get("cyclotron") or {}, current["cyclotron"]
     before, after = trained.get("files") or {}, now["files"]
@@ -352,6 +390,7 @@ def compare_code_state(saved: dict, current: dict) -> list[str]:
         "added": [name for name in after if name not in before],
         "removed": [name for name in before if name not in after],
     }
+    changes = {label: [name for name in names if _among(name, files)] for label, names in changes.items()}
     if any(changes.values()):
         lines.append(f"trained on {_where(trained)}, now {_where(now)}")
         lines += [f"cyclotron files {label}: {_listing(names)}" for label, names in changes.items() if names]
@@ -386,6 +425,7 @@ def read_git_records(run_dir: str) -> list[dict]:
                 "commit": commit.group(1),
                 "branch": branch.group(1) if branch else None,
                 "dirty": bool(diff.strip()),
+                "diff_files": re.findall(r"^diff --git a/(\S+) ", diff, re.MULTILINE),
             }
         )
     return records
@@ -404,8 +444,9 @@ def files_changed_since(repo: str, commit: str) -> list[str] | None:
     return [path for path in paths if os.path.basename(path) not in NOT_TRAINING_CODE]
 
 
-def _git_record_differences(run_dir: str) -> list[str]:
-    """For runs trained before ``code_state.yaml`` existed: compare with the commits rsl_rl logged in ``git/``."""
+def _git_record_differences(run_dir: str, files: set[str] | None = None) -> list[str]:
+    """For runs trained before ``code_state.yaml`` existed: compare with the commits rsl_rl logged in ``git/``.
+    ``files`` limits the package files compared, as in ``compare_code_state``."""
     records = read_git_records(run_dir)
     if not records:
         return [
@@ -416,24 +457,27 @@ def _git_record_differences(run_dir: str) -> list[str]:
     for record in {record["commit"]: record for record in records}.values():
         trained = f"trained on {_where(record)} (git/{record['file']})"
         changed = files_changed_since(repo, record["commit"]) if repo else None
+        if changed:
+            changed = [path for path in changed if _among(path, files)]
         if not repo:
             lines.append(f"{trained}; the current code isn't in a git repository, so it can't be compared")
         elif changed is None:
             lines.append(f"{trained}; that commit isn't in this clone, so changes can't be listed")
         elif changed:
             lines.append(f"{trained}; changed under source/ since then: {_listing(changed)}")
-        elif record["dirty"]:
+        elif record["dirty"] and any(_among(path, files) for path in record["diff_files"]):
             lines.append(f"{trained}; it had uncommitted changes, so it can't be compared exactly")
     return lines
 
 
-def code_differences(run_dir: str, current: dict) -> list[str]:
-    """Describe how the current code (``record_code_state()``) differs from the code a run was trained with."""
+def code_differences(run_dir: str, current: dict, files: set[str] | None = None) -> list[str]:
+    """Describe how the current code (``record_code_state()``) differs from the code a run was trained with.
+    ``files`` limits the package files compared (``policy_code_files``); None compares them all."""
     path = os.path.join(run_dir, "params", CODE_STATE_FILE)
     if not os.path.isfile(path):
-        return _git_record_differences(run_dir)
+        return _git_record_differences(run_dir, files)
     with open(path) as f:
-        return compare_code_state(yaml.safe_load(f) or {}, current)
+        return compare_code_state(yaml.safe_load(f) or {}, current, files)
 
 
 def training_code(run_dir: str) -> str | None:

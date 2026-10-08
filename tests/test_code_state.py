@@ -13,6 +13,7 @@ import yaml
 
 from cyclotron.code_state import (
     CODE_STATE_FILE,
+    _short,
     _without_credentials,
     code_differences,
     compare_code_state,
@@ -25,6 +26,7 @@ from cyclotron.code_state import (
     load_config,
     load_policy,
     normalize_config,
+    policy_code_files,
     policy_interface,
     policy_shape_errors,
     read_git_records,
@@ -251,6 +253,35 @@ def test_compare_code_state_lists_files_dependencies_and_versions(tmp_path):
     ]
 
 
+def test_policy_code_files_are_the_package_files_behind_the_policy_settings():
+    env, agent = make_env(), make_agent()
+    files = {"tasks/locomotion/mdp/observations.py", "tasks/locomotion/mdp/observations/__init__.py"}
+    # Isaac Lab's functions (the other terms, the action and actuator classes) come with Isaac Lab's commit.
+    assert policy_code_files(env, agent) == files
+    # Runs trained under the package's old name, which is no longer installed, name the same files.
+    func = env["observations"]["policy"]["base_ang_vel"]["func"]
+    env["observations"]["policy"]["base_ang_vel"]["func"] = func.replace("cyclotron.", "isaac_asimov.")
+    assert policy_code_files(env, agent) == files
+
+
+def test_compare_code_state_can_be_limited_to_the_files_behind_the_policy_settings(tmp_path):
+    package = tmp_path / "pkg"
+    (package / "tasks").mkdir(parents=True)
+    (package / "tasks" / "observations.py").write_text("scale = 0.25\n")
+    (package / "tasks" / "rewards.py").write_text("weight = 1.0\n")
+    saved = record_code_state(package=str(package))
+    (package / "tasks" / "rewards.py").write_text("weight = 2.0\n")
+    current = record_code_state(package=str(package))
+    current["isaaclab_commit"] = "f" * 40
+    behind = {"tasks/observations.py"}
+    # A reward change can't change an exported policy; Isaac Lab and the robot model are always compared.
+    assert compare_code_state(saved, current, behind) == [f"Isaac Lab: {_short(saved['isaaclab_commit'])} -> fffffff"]
+    (package / "tasks" / "observations.py").write_text("scale = 0.5\n")
+    assert "cyclotron files changed: tasks/observations.py" in compare_code_state(
+        saved, record_code_state(package=str(package)), behind
+    )
+
+
 def test_code_state_records_the_robot_model_and_no_local_paths(tmp_path):
     urdf = tmp_path / "asimov_1.urdf"
     urdf.write_text("<robot/>")
@@ -272,15 +303,23 @@ def test_old_runs_fall_back_to_the_git_records_rsl_rl_wrote(tmp_path):
     git.mkdir()
     header = "--- git commit ---\n{}\n\n\n--- git status ---\nOn branch {}\nnothing to commit\n\n\n--- git diff ---\n{}"
     (git / "drift.diff").write_text(header.format("32aef5c5ec11641f785bfd3c4aebb9c4de6bdc6b", "exp/drift", ""))
-    (git / "wip.diff").write_text(header.format("bdf28f5e8b60584fd6b8b50b7433d639c5d8b958", "main", "+scale = 1\n"))
+    wip = "diff --git a/source/cyclotron/cyclotron/tasks/rewards.py b/source/cyclotron/cyclotron/tasks/rewards.py\n+w = 1\n"
+    (git / "wip.diff").write_text(header.format("bdf28f5e8b60584fd6b8b50b7433d639c5d8b958", "main", wip))
     assert read_git_records(str(tmp_path)) == [
         {
             "file": "drift.diff",
             "commit": "32aef5c5ec11641f785bfd3c4aebb9c4de6bdc6b",
             "branch": "exp/drift",
             "dirty": False,
+            "diff_files": [],
         },
-        {"file": "wip.diff", "commit": "bdf28f5e8b60584fd6b8b50b7433d639c5d8b958", "branch": "main", "dirty": True},
+        {
+            "file": "wip.diff",
+            "commit": "bdf28f5e8b60584fd6b8b50b7433d639c5d8b958",
+            "branch": "main",
+            "dirty": True,
+            "diff_files": ["source/cyclotron/cyclotron/tasks/rewards.py"],
+        },
     ]
     empty = tmp_path / "empty"
     empty.mkdir()

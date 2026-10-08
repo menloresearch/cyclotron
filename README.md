@@ -221,6 +221,9 @@ code and print what changed:
 - **Code**: cyclotron files that changed, and changes to Isaac Lab, the robot
   model or the package versions. Runs trained before `code_state.yaml` existed
   are compared with the commits rsl_rl logged in the run's `git/` folder.
+  `--export` lists only the code that can change an exported policy: the
+  cyclotron files defining the functions the policy settings name, plus the
+  robot model, Isaac Lab and the package versions.
 
 Code changes are warnings, since experiments change code on purpose; add
 `--strict` to stop instead. A checkpoint whose policy no longer fits the
