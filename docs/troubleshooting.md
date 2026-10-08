@@ -97,11 +97,11 @@ it was written from the code.
 
 ### "policy.onnx gives different actions than the checkpoint"
 
-The export self-check failed: the written ONNX does not reproduce the
+The export self-check failed: the new ONNX does not reproduce the
 checkpoint's actions (for a recurrent policy, its actions or the memory it
 returns over the first 3 steps), so the file is wrong (for example, a dropped
-observation normalizer), not your run. Nothing was verified, so do not deploy
-or share the file. This points at an exporter bug — please report it with the
+observation normalizer), not your run. The new files were discarded; the
+previous export in the output folder, if any, is unchanged. This points at an exporter bug — please report it with the
 run's `exported/export.log`.
 
 ### "Not logged in to Hugging Face"

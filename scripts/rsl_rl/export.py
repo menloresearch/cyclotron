@@ -12,7 +12,9 @@ policy. A run without ``env.yaml`` or ``agent.yaml`` can have them written from 
 
 import argparse
 import os
+import shutil
 import sys
+import tempfile
 
 from isaaclab.app import AppLauncher
 
@@ -58,6 +60,11 @@ if unknown_args:
     sys.exit(
         f"[ERROR] --export takes no setting overrides or other extra arguments ({' '.join(unknown_args)}): the run's"
         " env.yaml and agent.yaml are the only source of its settings."
+    )
+if args_cli.checkpoint is not None and "://" in args_cli.checkpoint:
+    sys.exit(
+        "[ERROR] --export needs the run folder around the checkpoint (params/env.yaml and agent.yaml), so it can't"
+        " export a checkpoint URL. Download the run folder and pass the checkpoint's path."
     )
 checkpoint_is_path = args_cli.checkpoint is not None and os.sep in args_cli.checkpoint
 if checkpoint_is_path:
@@ -125,6 +132,7 @@ from cyclotron.onnx_export import (
     existing_export_note,
     export_log,
     max_onnx_difference,
+    replace_export,
 )
 from cyclotron.run_config import generated_run_configs, mark_generated, missing_run_configs, restore_policy_settings
 
@@ -163,16 +171,15 @@ def _per_joint(value, count: int) -> list[float]:
 
 
 def _configured_offset(term) -> list[float]:
-    """A term's offset as configured, one float per joint.
+    """A joint position action's offset as configured, one float per joint.
 
     With ``use_default_offset`` the live offset is the default pose of the one environment export builds, which
     startup events such as ``randomize_joint_default_pos`` perturb. Resolve the robot's configured
     ``init_state.joint_pos`` the way Isaac Lab builds the default pose instead.
     """
-    from isaaclab.envs.mdp.actions import JointPositionAction
     from isaaclab.utils.string import resolve_matching_names_values
 
-    if not (isinstance(term, JointPositionAction) and term.cfg.use_default_offset):
+    if not term.cfg.use_default_offset:
         return _per_joint(term._offset, len(term._joint_names))
     asset = term._asset
     pose = [0.0] * asset.num_joints
@@ -183,9 +190,12 @@ def _configured_offset(term) -> list[float]:
     return [pose[int(i)] for i in joint_ids]
 
 
-def gather_deploy_metadata(env, policy, run_dir: str, log) -> dict[str, str] | None:
+def gather_deploy_metadata(env, policy, run_dir: str, raw_action_clip: float | None, log) -> dict[str, str] | None:
     """Resolve the deployment contract from the live environment, or None (with a message) if an action term
-    is not a joint action and the contract cannot describe it."""
+    is not a joint position action and the contract cannot describe it. ``raw_action_clip`` is the run's
+    ``clip_actions``, which rsl_rl's environment wrapper applies to the raw actions."""
+    from isaaclab.envs.mdp.actions import JointPositionAction
+
     manager = getattr(env.unwrapped, "action_manager", None)
     if manager is None:
         log("[WARNING] The environment has no action manager (direct workflow); not attaching deploy metadata.")
@@ -194,10 +204,14 @@ def gather_deploy_metadata(env, policy, run_dir: str, log) -> dict[str, str] | N
     clipped = False
     for name in manager.active_terms:
         term = manager.get_term(name)
-        names = getattr(term, "_joint_names", None)
-        if names is None:
-            log(f"[WARNING] Action term {name} is not a joint action; not attaching deploy metadata.")
+        # Velocity, effort and relative position actions turn actions into something other than position targets.
+        if not isinstance(term, JointPositionAction):
+            log(
+                f"[WARNING] Action term {name} ({type(term).__name__}) is not a joint position action; not attaching"
+                " deploy metadata."
+            )
             return None
+        names = term._joint_names
         joint_names += list(names)
         scale += _per_joint(term._scale, len(names))
         offset += _configured_offset(term)
@@ -217,6 +231,7 @@ def gather_deploy_metadata(env, policy, run_dir: str, log) -> dict[str, str] | N
     ]
     return deploy_metadata(
         joint_names=joint_names,
+        raw_action_clip=raw_action_clip,
         action_scale=scale,
         action_offset=offset,
         action_clip=clip if clipped else None,
@@ -243,6 +258,8 @@ def main():
     env_cfg.scene.num_envs = 1
     env_cfg.seed = agent_cfg.seed
     env_cfg.sim.device = args_cli.device if args_cli.device is not None else env_cfg.sim.device
+    # The policy runs where the environment does.
+    agent_cfg.device = env_cfg.sim.device
 
     log_root_path = os.path.abspath(os.path.join("logs", "rsl_rl", agent_cfg.experiment_name))
     checkpoint = cli_args.resolve_checkpoint(log_root_path, agent_cfg, args_cli)
@@ -318,7 +335,8 @@ def main():
             dump_yaml(path, cfg)
             mark_generated(path, current_code(), datetime.now().strftime("%Y-%m-%d %H:%M"))
             log(f"[WARNING] Wrote {path} from the current code, marked as generated.")
-    mismatches, new = rebuild_differences(run_dir, env_dict, agent_dict)
+    saved_configs = load_run_configs(run_dir)
+    mismatches, new = rebuild_differences(saved_configs, env_dict, agent_dict)
     if mismatches:
         log("[ERROR] The rebuilt policy settings don't match the run's env.yaml and agent.yaml:")
         for line in mismatches:
@@ -335,7 +353,7 @@ def main():
             env.close()
             sys.exit(1)
     # Rewards, the training algorithm and the like can't change what is exported, so they aren't compared here.
-    behind_settings = policy_code_files(*load_run_configs(run_dir))
+    behind_settings = policy_code_files(*saved_configs)
     code = code_differences(run_dir, record_code_state(normalize_config(env_dict)), behind_settings)
     if code:
         log("[WARNING] Code behind the policy settings changed since this run was trained:")
@@ -368,20 +386,37 @@ def main():
         sys.exit(1)
     policy = runner.get_inference_policy(device=env.unwrapped.device)
 
-    runner.export_policy_to_onnx(path=output_dir, filename="policy.onnx")
-    runner.export_policy_to_jit(path=output_dir, filename="policy.pt")
-    missing = copy_run_yamls(run_dir, output_dir)
-    for name in missing:
-        log(f"[WARNING] {run_dir}/params/{name} not found; the viewer and --share need it next to policy.onnx.")
+    # Written to a staging folder and moved into place only once the check below passes, so a failed export leaves
+    # the previous one as it was.
+    staging = tempfile.mkdtemp(prefix=".staging-", dir=output_dir)
+    try:
+        onnx_path = os.path.join(staging, "policy.onnx")
+        runner.export_policy_to_onnx(path=staging, filename="policy.onnx")
+        runner.export_policy_to_jit(path=staging, filename="policy.pt")
+        missing = copy_run_yamls(run_dir, staging)
+        for name in missing:
+            log(f"[WARNING] {run_dir}/params/{name} not found; the viewer and --share need it next to policy.onnx.")
 
-    metadata = gather_deploy_metadata(env, policy, run_dir, log)
-    if metadata is not None:
-        attach_deploy_metadata(os.path.join(output_dir, "policy.onnx"), metadata)
-        log(f"[INFO] Attached deploy metadata to policy.onnx: {', '.join(metadata)}, obs_dim, action_dim.")
+        metadata = gather_deploy_metadata(env, policy, run_dir, agent_cfg.clip_actions, log)
+        if metadata is not None:
+            attach_deploy_metadata(onnx_path, metadata)
+            log(f"[INFO] Attached deploy metadata to policy.onnx: {', '.join(metadata)}, obs_dim, action_dim.")
 
-    difference = max_onnx_difference(policy, env.get_observations(), os.path.join(output_dir, "policy.onnx"))
-    checked = f"actions and memory over {RECURRENT_STEPS} steps" if policy.is_recurrent else "actions"
-    env.close()
+        difference = max_onnx_difference(policy, env.get_observations(), onnx_path)
+        checked = f"actions and memory over {RECURRENT_STEPS} steps" if policy.is_recurrent else "actions"
+        env.close()
+        # Isaac Sim replaces sys.exit with a version that only takes an exit code, so the message is printed first.
+        if difference > ONNX_TOLERANCE:
+            shutil.rmtree(staging)
+            log(
+                "[ERROR] policy.onnx gives different actions than the checkpoint"
+                f" (max difference {difference:.2e}; checked {checked}). Nothing was written to {output_dir}."
+            )
+            sys.exit(1)
+        replace_export(staging, output_dir)
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
+    log(f"[INFO] Checked policy.onnx against the checkpoint ({checked}): max difference {difference:.1e}.")
 
     log(f"[INFO] Exported {os.path.basename(checkpoint)} to: {output_dir}")
     for name in ("policy.onnx", "policy.pt", *BUNDLE_YAMLS, *OPTIONAL_BUNDLE_YAMLS):
@@ -389,16 +424,10 @@ def main():
             log(f"  {name}")
     if not_saved or generated:
         log(f"[WARNING] {' and '.join(not_saved or generated)} came from the current code, not from training.")
-    if code or new:
-        log("[WARNING] Code behind the policy settings changed since training; see the warnings before the export.")
-    # Isaac Sim replaces sys.exit with a version that only takes an exit code, so the message is printed first.
-    if difference > ONNX_TOLERANCE:
-        log(
-            "[ERROR] policy.onnx gives different actions than the checkpoint"
-            f" (max difference {difference:.2e}; checked {checked})."
-        )
-        sys.exit(1)
-    log(f"[INFO] Checked policy.onnx against the checkpoint ({checked}): max difference {difference:.1e}.")
+    if new:
+        log("[WARNING] The current code has policy settings the run didn't save; see the warning before the export.")
+    if code:
+        log("[WARNING] Code behind the policy settings changed since training; see the warning before the export.")
 
 
 if __name__ == "__main__":

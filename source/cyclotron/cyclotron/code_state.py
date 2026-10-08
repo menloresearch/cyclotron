@@ -80,8 +80,9 @@ def _git_state(path: str) -> dict:
         "commit": _git(folder, "rev-parse", "HEAD"),
         "branch": None if branch == "HEAD" else branch,
         "remote": _without_credentials(_git(folder, "remote", "get-url", "origin")),
-        # File hashes are exact; this only says whether the commit alone describes the code.
-        "dirty": bool(_git(folder, "status", "--porcelain", "--untracked-files=no")),
+        # File hashes are exact; this only says whether the commit alone describes the code in ``folder``: changed
+        # files and new ones never added to git count, ignored ones and the rest of the repository don't.
+        "dirty": bool(_git(folder, "status", "--porcelain", "--", ".")),
     }
 
 
@@ -182,7 +183,8 @@ def edited_run_configs(run_dir: str) -> list[str] | None:
         recorded = (yaml.safe_load(f) or {}).get("run_configs")
     if not recorded:
         return None
-    return [name for name, digest in recorded.items() if hash_run_configs(os.path.dirname(path)).get(name) != digest]
+    current = hash_run_configs(os.path.dirname(path))
+    return [name for name, digest in recorded.items() if current.get(name) != digest]
 
 
 def normalize_config(config: dict) -> dict:
@@ -197,14 +199,14 @@ _IGNORED_KEYS = frozenset({"noise", "enable_corruption", "debug_vis", "init_std"
 # Changes that keep every weight's shape but make the same weights compute something else.
 _NETWORK_KEYS = re.compile(r"agent\.(actor|student)\.(class_name|activation|rnn_type)")
 # A function or class as Isaac Lab writes it, "module.path:name".
-_FUNCTION = re.compile(r"[A-Za-z_][\w.]*:([A-Za-z_]\w*)")
+_FUNCTION = re.compile(r"([A-Za-z_][\w.]*):([A-Za-z_]\w*)")
 
 
 def _short_names(value):
     """Keep only the name of each ``module.path:name``, so moving or renaming a module isn't a change."""
     if isinstance(value, str):
         match = _FUNCTION.fullmatch(value)
-        return match.group(1) if match else value
+        return match.group(2) if match else value
     if isinstance(value, dict):
         return {key: _short_names(item) for key, item in value.items()}
     if isinstance(value, (list, tuple)):
@@ -495,13 +497,19 @@ def training_code(run_dir: str) -> str | None:
 
 
 def training_commit(run_dir: str) -> str | None:
-    """The commit a run was trained with, or None when the run doesn't record one (or names several)."""
+    """The commit a run was trained with, or None when the run doesn't record one (or names several). A run trained
+    with uncommitted changes gets ``-dirty`` appended, as ``git describe --dirty`` does: the commit alone isn't its
+    code."""
     path = os.path.join(run_dir, "params", CODE_STATE_FILE)
     if os.path.isfile(path):
         with open(path) as f:
-            return ((yaml.safe_load(f) or {}).get("cyclotron") or {}).get("commit")
-    commits = {record["commit"] for record in read_git_records(run_dir)}
-    return commits.pop() if len(commits) == 1 else None
+            code = (yaml.safe_load(f) or {}).get("cyclotron") or {}
+        records = [code] if code.get("commit") else []
+    else:
+        records = list({record["commit"]: record for record in read_git_records(run_dir)}.values())
+    if len(records) != 1:
+        return None
+    return records[0]["commit"] + ("-dirty" if records[0].get("dirty") else "")
 
 
 def check_out_hint(run_dir: str) -> str:
@@ -549,15 +557,16 @@ def describe_changes(run_dir: str, env_cfg: dict, agent_cfg: dict, consequence: 
     return "\n".join(lines), "error" if errors else "warning"
 
 
-def rebuild_differences(run_dir: str, env_cfg: dict, agent_cfg: dict) -> tuple[list[str], list[str]]:
-    """Compare the policy settings ``--export`` rebuilt from a run's ``env.yaml`` and ``agent.yaml`` with the saved
-    ones. Returns ``(mismatches, new)``, one line each: settings whose value differs from the run's, which means the
-    rebuild failed, and settings the run didn't save (added to the code since), which keep the current code's value.
+def rebuild_differences(saved: tuple[dict, dict], env_cfg: dict, agent_cfg: dict) -> tuple[list[str], list[str]]:
+    """Compare the policy settings ``--export`` rebuilt from a run's ``env.yaml`` and ``agent.yaml`` (``saved``, from
+    ``load_run_configs``) with the saved ones. Returns ``(mismatches, new)``, one line each: settings whose value
+    differs from the run's, which means the rebuild failed, and settings the run didn't save (added to the code
+    since), which keep the current code's value.
 
     ``env_cfg`` and ``agent_cfg`` are the current configs as plain dicts (Isaac Lab's ``class_to_dict``), taken where
     training saves them: after the environment is created.
     """
-    before = policy_interface(*load_run_configs(run_dir))
+    before = policy_interface(*saved)
     after = policy_interface(normalize_config(env_cfg), normalize_config(agent_cfg))
     mismatches, new = [], []
     for key in dict.fromkeys([*before, *after]):

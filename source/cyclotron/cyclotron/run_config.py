@@ -21,10 +21,8 @@ import importlib
 import os
 import re
 
-from cyclotron.code_state import _IGNORED_KEYS, RUN_CONFIGS, lookup, policy_sections
+from cyclotron.code_state import _FUNCTION, _IGNORED_KEYS, RUN_CONFIGS, lookup, policy_sections
 
-# A function or class as Isaac Lab writes it, "module.path:name".
-_FUNCTION = re.compile(r"([A-Za-z_][\w.]*):([A-Za-z_]\w*)")
 # Marks a setting the run's yaml doesn't have, which then keeps the code's value.
 _MISSING = object()
 
@@ -79,7 +77,7 @@ def _is_config(value) -> bool:
 
 def _default(cls, key: str):
     """A config class's default for ``key``. Isaac Lab's ``configclass`` stores every default as a factory."""
-    field = cls.__dataclass_fields__.get(key)
+    field = getattr(cls, "__dataclass_fields__", {}).get(key)
     if field is None:
         return None
     if field.default is not dataclasses.MISSING:
@@ -141,7 +139,9 @@ class _Restorer:
         """Restore an observation group or the actions; a term the run didn't have is turned off."""
         if saved is _MISSING:
             return
-        self.value(container, saved, name)
+        if not isinstance(saved, dict) or self.value(container, saved, name) is not container:
+            self.problems.append(f"{name}: the run saved a different kind of section here")
+            return
         for key, term in list(vars(container).items()):
             if _is_config(term) and key not in saved:
                 setattr(container, key, None)
@@ -153,7 +153,8 @@ class _Restorer:
         if not isinstance(wanted, str) or getattr(current, "class_name", wanted) == wanted:
             return current
         root = next(
-            c for c in reversed(type(current).__mro__) if "class_name" in getattr(c, "__dataclass_fields__", {})
+            (c for c in reversed(type(current).__mro__) if "class_name" in getattr(c, "__dataclass_fields__", {})),
+            type(current),
         )
         family, index = [root], 0
         while index < len(family):

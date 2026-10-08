@@ -156,6 +156,15 @@ def test_restore_leaves_a_side_the_run_did_not_save_as_the_code_has_it():
     assert type(agent.actor) is ModelCfg and agent.clip_actions is None
 
 
+def test_restore_reports_a_saved_section_of_another_kind_instead_of_crashing():
+    env, agent = make_cfgs()
+    saved_env, saved_agent = saved_configs()
+    saved_env["observations"]["policy"] = None
+    assert restore_policy_settings(env, agent, saved_env, saved_agent) == [
+        "env.observations.policy: the run saved a different kind of section here"
+    ]
+
+
 def test_restore_lists_the_settings_the_current_code_cannot_take():
     env, agent = make_cfgs()
     saved_env, saved_agent = saved_configs()

@@ -17,6 +17,12 @@ EXPERIMENT_TASKS = {
 }
 
 
+def checkpoints(run_dir: str) -> list[str]:
+    """The run's ``model_<iteration>.pt`` checkpoint files, oldest iteration first."""
+    names = [name for name in os.listdir(run_dir) if re.fullmatch(r"model_\d+\.pt", name)]
+    return sorted(names, key=lambda name: int(name[len("model_") : -len(".pt")]))
+
+
 def read_experiment_name(agent_yaml_path: str) -> str | None:
     """Return ``experiment_name`` from a run's ``params/agent.yaml``, without loading Isaac Lab's yaml tags."""
     with open(agent_yaml_path) as f:

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import shutil
 from contextlib import contextmanager
 from datetime import datetime
@@ -14,6 +13,7 @@ import torch
 from tensordict import TensorDict
 
 from cyclotron.code_state import CODE_STATE_FILE, RUN_CONFIGS
+from cyclotron.hub import checkpoints
 
 # The run's training config, copied next to policy.onnx so the export folder has the same files as a shared Hub repo.
 BUNDLE_YAMLS = RUN_CONFIGS
@@ -29,6 +29,7 @@ RECURRENT_STEPS = 3
 
 def deploy_metadata(
     joint_names: list[str],
+    raw_action_clip: float | None,
     action_scale: list[float],
     action_offset: list[float],
     action_clip: list[list[float]] | None,
@@ -42,10 +43,11 @@ def deploy_metadata(
     """The deployment contract of a policy, as the strings stored in ONNX metadata.
 
     Only what a runtime must agree with the policy about before driving a robot with it: the joint order the actions
-    are in, the affine that turns raw actions into position targets (``target = action * scale + offset``, then an
-    optional ``[low, high]`` clip per joint), the PD gains the targets were trained to be tracked with, the rate the
-    policy was trained to run at, the ordered observation terms its input is built from, and the training commit for
-    traceability. Training settings stay in the yaml files next to the ONNX; they are not deployment inputs.
+    are in, how raw actions become position targets (clamped to ``[-raw_action_clip, raw_action_clip]`` when the run
+    set ``clip_actions``, then ``target = action * scale + offset``, then an optional ``[low, high]`` clip per joint),
+    the PD gains the targets were trained to be tracked with, the rate the policy was trained to run at, the ordered
+    observation terms its input is built from, and the training commit for traceability. Training settings stay in
+    the yaml files next to the ONNX; they are not deployment inputs.
     """
     per_joint = [action_scale, action_offset, joint_stiffness, joint_damping]
     if any(len(values) != len(joint_names) for values in per_joint):
@@ -55,6 +57,7 @@ def deploy_metadata(
     metadata = {
         "deploy_metadata_version": DEPLOY_METADATA_VERSION,
         "joint_names": json.dumps(joint_names),
+        "raw_action_clip": json.dumps(None if raw_action_clip is None else float(raw_action_clip)),
         "action_scale": json.dumps(action_scale),
         "action_offset": json.dumps(action_offset),
         "action_clip": json.dumps(action_clip),
@@ -124,15 +127,18 @@ def existing_export_note(run_dir: str, output_dir: str) -> str | None:
     if not os.path.isfile(existing):
         return None
     exported_at = os.path.getmtime(existing)
-    newer = [
-        name
-        for name in os.listdir(run_dir)
-        if re.fullmatch(r"model_\d+\.pt", name) and os.path.getmtime(os.path.join(run_dir, name)) > exported_at
-    ]
+    newer = [name for name in checkpoints(run_dir) if os.path.getmtime(os.path.join(run_dir, name)) > exported_at]
     if not newer:
         return "Overwriting the run's existing export."
-    latest = max(newer, key=lambda name: int(name[len("model_") : -len(".pt")]))
-    return f"Overwriting an export made before {latest} was written, so it was not of the run's latest checkpoint."
+    return f"Overwriting an export made before {newer[-1]} was written, so it was not of the run's latest checkpoint."
+
+
+def replace_export(staging: str, output_dir: str) -> None:
+    """Move a checked export from ``staging`` into ``output_dir``, replacing the previous export's files, and remove
+    ``staging``. Export writes into a staging folder first so that a failed check leaves the previous export as is."""
+    for name in sorted(os.listdir(staging)):
+        os.replace(os.path.join(staging, name), os.path.join(output_dir, name))
+    os.rmdir(staging)
 
 
 def copy_run_yamls(run_dir: str, output_dir: str) -> list[str]:

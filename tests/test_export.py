@@ -9,7 +9,7 @@ from rsl_rl.models import MLPModel, RNNModel
 from rsl_rl.runners import OnPolicyRunner
 from tensordict import TensorDict
 
-from cyclotron.hub import infer_task
+from cyclotron.hub import checkpoints, infer_task
 from cyclotron.onnx_export import (
     attach_deploy_metadata,
     copy_run_yamls,
@@ -17,6 +17,7 @@ from cyclotron.onnx_export import (
     existing_export_note,
     export_log,
     max_onnx_difference,
+    replace_export,
 )
 
 
@@ -145,6 +146,7 @@ def test_recurrent_onnx_with_wrong_memory_weights_is_caught(tmp_path, trained):
 def sample_metadata(**overrides):
     values = dict(
         joint_names=["hip", "knee", "ankle", "toe"],
+        raw_action_clip=None,
         action_scale=[0.25, 0.25, 0.25, 0.5],
         action_offset=[0.1, -0.4, 0.3, 0.0],
         action_clip=None,
@@ -166,7 +168,8 @@ def test_deploy_metadata_round_trip_leaves_the_graph_unchanged(tmp_path, trained
     policy, _ = trained
     path = export(policy, tmp_path)
     graph_before = onnx.load(path).graph.SerializeToString()
-    attach_deploy_metadata(path, sample_metadata(action_clip=[[None, None], [-1.0, 1.0], [None, 2.0], [None, None]]))
+    clip = [[None, None], [-1.0, 1.0], [None, 2.0], [None, None]]
+    attach_deploy_metadata(path, sample_metadata(raw_action_clip=1, action_clip=clip))
     model = onnx.load(path)
     assert model.graph.SerializeToString() == graph_before
     read = {entry.key: entry.value for entry in model.metadata_props}
@@ -175,6 +178,9 @@ def test_deploy_metadata_round_trip_leaves_the_graph_unchanged(tmp_path, trained
     assert read["deploy_metadata_version"] == "1"
     assert json.loads(read["joint_names"]) == ["hip", "knee", "ankle", "toe"]
     assert json.loads(read["action_clip"])[1] == [-1.0, 1.0]
+    # The run's clip_actions, applied to the raw actions before the affine.
+    assert json.loads(read["raw_action_clip"]) == 1.0
+    assert json.loads(sample_metadata()["raw_action_clip"]) is None
     assert float(read["policy_rate_hz"]) == 50.0 and read["decimation"] == "4"
     assert read["trained_commit"] == "32aef5c5ec11"
 
@@ -222,6 +228,25 @@ def test_existing_export_note_names_a_checkpoint_newer_than_the_export(tmp_path)
     )
     note = existing_export_note(run_dir, exported)
     assert "model_2500.pt" in note and "latest" in note
+
+
+def test_checkpoints_are_sorted_by_iteration_not_name(tmp_path):
+    for name in ("model_1000.pt", "model_50.pt", "model_2500.pt", "model_x.pt", "notes.txt"):
+        (tmp_path / name).write_text("")
+    assert checkpoints(str(tmp_path)) == ["model_50.pt", "model_1000.pt", "model_2500.pt"]
+
+
+def test_replace_export_moves_a_checked_export_over_the_previous_one(tmp_path):
+    exported = tmp_path / "exported"
+    staging = exported / ".staging-1"
+    staging.mkdir(parents=True)
+    (exported / "policy.onnx").write_text("old")
+    (exported / "export.log").write_text("history\n")
+    (staging / "policy.onnx").write_text("new")
+    (staging / "env.yaml").write_text("decimation: 4\n")
+    replace_export(str(staging), str(exported))
+    assert sorted(os.listdir(exported)) == ["env.yaml", "export.log", "policy.onnx"]
+    assert (exported / "policy.onnx").read_text() == "new" and (exported / "export.log").read_text() == "history\n"
 
 
 def test_existing_export_note_on_an_export_of_the_latest_checkpoint(tmp_path):

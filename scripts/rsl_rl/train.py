@@ -191,14 +191,17 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         print(f"[INFO]: Loading model checkpoint from: {resume_path}")
         runner.load(resume_path)
 
-    dump_yaml(os.path.join(log_dir, "params", "env.yaml"), env_cfg)
-    dump_yaml(os.path.join(log_dir, "params", "agent.yaml"), agent_cfg)
-    # What --export and --play compare against to warn about code changes; <run>/<file>, not a local path.
-    loaded = os.path.join(*resume_path.split(os.sep)[-2:]) if loads_checkpoint else None
-    code_state = record_code_state(class_to_dict(env_cfg), loaded_checkpoint=loaded)
-    # The sha256 of the two files just written, so --export and --share notice if they are edited later.
-    code_state["run_configs"] = hash_run_configs(os.path.join(log_dir, "params"))
-    write_code_state(os.path.join(log_dir, "params"), code_state)
+    # Only the main process writes params/, like rsl_rl's logger: ranks that start in the same second share log_dir,
+    # and another rank's env.yaml (its own device and seed) wouldn't match the hashes this one records.
+    if not args_cli.distributed or app_launcher.global_rank == 0:
+        dump_yaml(os.path.join(log_dir, "params", "env.yaml"), env_cfg)
+        dump_yaml(os.path.join(log_dir, "params", "agent.yaml"), agent_cfg)
+        # What --export and --play compare against to warn about code changes; <run>/<file>, not a local path.
+        loaded = os.path.join(*resume_path.split(os.sep)[-2:]) if loads_checkpoint else None
+        code_state = record_code_state(class_to_dict(env_cfg), loaded_checkpoint=loaded)
+        # The sha256 of the two files just written, so --export and --share notice if they are edited later.
+        code_state["run_configs"] = hash_run_configs(os.path.join(log_dir, "params"))
+        write_code_state(os.path.join(log_dir, "params"), code_state)
 
     print_run_info(log_dir)
     try:

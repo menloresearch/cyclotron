@@ -15,12 +15,11 @@ itself is not changed.
 
 import argparse
 import os
-import re
 import subprocess
 import sys
 
 from cyclotron.code_state import edited_run_configs, hash_run_configs
-from cyclotron.hub import infer_task, rehash_uploaded_run_configs, strip_local_paths
+from cyclotron.hub import checkpoints, infer_task, rehash_uploaded_run_configs, strip_local_paths
 from cyclotron.run_config import generated_run_configs
 
 README_TEMPLATE = """---
@@ -88,10 +87,10 @@ parser.add_argument("--dry-run", "--dry_run", dest="dry_run", action="store_true
 
 
 def latest_checkpoint(run_dir: str) -> str:
-    checkpoints = [f for f in os.listdir(run_dir) if re.fullmatch(r"model_\d+\.pt", f)]
-    if not checkpoints:
+    names = checkpoints(run_dir)
+    if not names:
         sys.exit(f"[ERROR] No model_*.pt checkpoints found in: {run_dir}")
-    return os.path.join(run_dir, max(checkpoints, key=lambda f: int(f[len("model_") : -len(".pt")])))
+    return os.path.join(run_dir, names[-1])
 
 
 def resolve_checkpoint(run_dir: str, checkpoint: str) -> str:

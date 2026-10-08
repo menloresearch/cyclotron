@@ -54,9 +54,11 @@ head are baked into the graph.
    discriminator and the optimizer are training-only state, so a run whose
    critic no longer matches the current code still exports.
 4. **Exports and bundles.** Writes `policy.onnx` and `policy.pt` with rsl_rl's
-   exporter and copies the run's yaml files next to them.
+   exporter and copies the run's yaml files next to them, in a staging folder
+   inside the output folder.
 5. **Attaches the deploy metadata** described below to `policy.onnx`.
-6. **Checks the export** against the checkpoint.
+6. **Checks the export** against the checkpoint, and only then moves the
+   files into place, replacing the previous export's.
 
 Every check along the way is listed in the next section, in the order it runs.
 
@@ -77,8 +79,10 @@ These take a second, so a typo doesn't cost an Isaac Sim launch.
    run's `env.yaml` and `agent.yaml` are the only source of its settings.
    `--export takes no setting overrides or other extra arguments (…)`
 2. **The checkpoint exists.** Stops on a `--checkpoint` path that isn't a
-   file (`Checkpoint not found: …`), or a bare filename without `--load_run`
-   (`--checkpoint '…' is not a path. …`).
+   file (`Checkpoint not found: …`), a bare filename without `--load_run`
+   (`--checkpoint '…' is not a path. …`), or a URL, since the export needs the
+   run folder around the checkpoint (`--export needs the run folder around
+   the checkpoint …`).
 3. **The task is known.** Taken from `--task`, else from the experiment name
    in the run's `agent.yaml`, else from `--experiment_name`. Stops when none
    names a known task: `Cannot infer the task: …/agent.yaml not found. Pass it
@@ -152,7 +156,8 @@ These take a second, so a typo doesn't cost an Isaac Sim launch.
 ### After writing the files
 
 13. **The deploy metadata can describe the actions.** For a direct-workflow
-    environment, or an action term that isn't a joint action, warns and
+    environment, or an action term that isn't a joint position action (a
+    velocity, effort or relative position action, for example), warns and
     writes `policy.onnx` without metadata rather than a wrong contract:
     `… not attaching deploy metadata.`
 14. **`policy.onnx` gives the checkpoint's actions.** Feeds the same 64
@@ -166,8 +171,8 @@ These take a second, so a typo doesn't cost an Isaac Sim launch.
     runs in full float32, like onnxruntime. Stops when anything differs by
     more than 1e-4, which means a broken export, for example a dropped
     observation normalizer: `policy.onnx gives different actions than the
-    checkpoint (…)`. The files are already written at that point; don't use
-    them. Notes `Checked policy.onnx against the checkpoint (…): max
+    checkpoint (…). Nothing was written to <output folder>.` The new files
+    are discarded and the previous export, if any, is left as it was. Notes `Checked policy.onnx against the checkpoint (…): max
     difference …` otherwise.
 
 The export ends with a summary: the files written, and a reminder of any
@@ -213,18 +218,19 @@ that read no metadata run the file unchanged, since the graph is untouched.
 | `obs_dim`, `action_dim` | int | Width of the graph's `obs` input and `actions` output, read from the graph itself. |
 | `joint_names` | JSON list of `action_dim` strings | The joint each action drives, in action order. The single most safety-critical check: a joint-order mismatch silently scrambles the robot. |
 | `action_scale`, `action_offset` | JSON lists of `action_dim` floats | The affine that turns a raw action into a position target: `target = action * scale + offset`. The offset is the run's default pose (`init_state.joint_pos` in its `env.yaml`) for tasks that use `use_default_offset`, without the per-environment jitter that `randomize_joint_default_pos` adds during training. |
+| `raw_action_clip` | JSON: `null`, or a float `c` | The run's `clip_actions`: raw actions are clamped to `[-c, c]` before the affine, as rsl_rl's environment wrapper did in training. `null` when the run didn't clip. |
 | `action_clip` | JSON: `null`, or `action_dim` pairs `[low, high]` (`null` for an unclipped side) | Clip applied to the targets after the affine. |
 | `joint_stiffness`, `joint_damping` | JSON lists of `action_dim` floats | The PD gains (kp/kd) the targets were trained to be tracked with, from the run's configured actuators (not the simulated values, which randomization events can perturb). |
 | `sim_dt`, `decimation`, `policy_rate_hz` | float, int, float | The policy step: it was trained to act every `sim_dt x decimation` seconds. |
 | `observation_names` | JSON list of strings | The policy's input terms in order, as named in `env.yaml` (`<group>/<term>` when the actor reads several groups). The per-term recipe stays in `env.yaml`. |
-| `trained_commit` | string, absent when unknown | The commit the run was trained with, from `code_state.yaml` (or the run's `git/` records), for traceability. |
+| `trained_commit` | string, absent when unknown | The commit the run was trained with, from `code_state.yaml` (or the run's `git/` records), for traceability. Ends in `-dirty`, as `git describe --dirty` does, when the run had uncommitted changes, so the commit alone isn't its code. |
 
 The metadata is resolved from the live environment at export time, so patterns
 in the config (joint regexes, per-joint scales) arrive as concrete per-joint
 values. It is attached for manager-based tasks whose action terms are joint
-actions; for anything else (direct-workflow envs, non-joint action terms)
-`--export` prints a warning and writes the file without metadata rather than
-writing a wrong contract.
+position actions; for anything else (direct-workflow envs, velocity, effort or
+relative position actions) `--export` prints a warning and writes the file
+without metadata rather than writing a wrong contract.
 
 ### Inspecting the metadata
 
@@ -296,7 +302,7 @@ What to expect with a foreign run:
   installed here, and that this checkout has under no other module, stops the
   export.
 - The deploy metadata is attached as long as the task is manager-based with
-  joint actions, Anymal and friends included; `trained_commit` is only
+  joint position actions, Anymal and friends included; `trained_commit` is only
   present when the run recorded a single commit.
 - The export check (ONNX vs checkpoint) runs the same way as for local runs.
 - [`--view`](view.md) is Asimov-specific: the viewer

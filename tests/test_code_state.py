@@ -13,6 +13,7 @@ import yaml
 
 from cyclotron.code_state import (
     CODE_STATE_FILE,
+    _git_state,
     _short,
     _without_credentials,
     code_differences,
@@ -25,6 +26,7 @@ from cyclotron.code_state import (
     interface_differences,
     load_config,
     load_policy,
+    load_run_configs,
     normalize_config,
     policy_code_files,
     policy_interface,
@@ -349,6 +351,28 @@ def test_files_changed_since_ignores_pure_renames(tmp_path):
     assert files_changed_since(str(tmp_path), "0" * 40) is None
 
 
+@pytest.mark.skipif(shutil.which("git") is None, reason="needs git")
+def test_dirty_counts_new_files_in_the_package_but_not_elsewhere(tmp_path):
+    def git(*args):
+        return subprocess.run(["git", "-C", str(tmp_path), *args], check=True, capture_output=True, text=True).stdout
+
+    git("init", "-q")
+    git("config", "user.email", "test@example.com")
+    git("config", "user.name", "test")
+    git("config", "commit.gpgsign", "false")
+    package = tmp_path / "source" / "pkg"
+    package.mkdir(parents=True)
+    (package / "obs.py").write_text("scale = 0.25\n")
+    git("add", ".")
+    git("commit", "-q", "-m", "trained here")
+    assert _git_state(str(package))["dirty"] is False
+    (tmp_path / "README.md").write_text("notes\n")
+    assert _git_state(str(package))["dirty"] is False
+    # A new module training imports but nobody added to git: the commit alone isn't the code.
+    (package / "new_reward.py").write_text("weight = 1.0\n")
+    assert _git_state(str(package))["dirty"] is True
+
+
 def test_edited_run_configs_compares_with_the_sha256_training_recorded(tmp_path):
     params = tmp_path / "params"
     params.mkdir()
@@ -372,13 +396,13 @@ def test_rebuild_differences_flags_values_unlike_the_run_and_lists_settings_it_d
     params.mkdir()
     (params / "env.yaml").write_text(dump(make_env()))
     (params / "agent.yaml").write_text(dump(make_agent()))
-    assert rebuild_differences(str(tmp_path), make_env(), make_agent()) == ([], [])
+    assert rebuild_differences(load_run_configs(str(tmp_path)), make_env(), make_agent()) == ([], [])
 
     env, agent = make_env(), make_agent()
     env["actions"]["joint_pos"]["scale"] = 0.5
     env["actions"]["joint_pos"]["clip"] = {".*": (-1.0, 1.0)}  # a setting added to the code since training
     agent["actor"]["activation"] = "relu"
-    assert rebuild_differences(str(tmp_path), env, agent) == (
+    assert rebuild_differences(load_run_configs(str(tmp_path)), env, agent) == (
         ["env.actions.joint_pos.scale: 0.25 -> 0.5", "agent.actor.activation: elu -> relu"],
         ["env.actions.joint_pos.clip[.*]: none -> [-1.0, 1.0]"],
     )
@@ -475,6 +499,8 @@ def test_training_commit_returns_a_single_raw_commit_or_none(tmp_path):
     new_run, old_run, ambiguous = tmp_path / "new", tmp_path / "old", tmp_path / "ambiguous"
     write_code_state(str(new_run / "params"), {"cyclotron": {"commit": "32aef5c5ec11", "branch": "exp/drift"}})
     assert training_commit(str(new_run)) == "32aef5c5ec11"
+    write_code_state(str(new_run / "params"), {"cyclotron": {"commit": "32aef5c5ec11", "dirty": True}})
+    assert training_commit(str(new_run)) == "32aef5c5ec11-dirty"
     old_run.mkdir()
     write_git_record(old_run, "isaac_asimov.diff", "bdf28f5e8b60584fd6b8b50b7433d639c5d8b958", "main")
     assert training_commit(str(old_run)) == "bdf28f5e8b60584fd6b8b50b7433d639c5d8b958"
