@@ -100,6 +100,23 @@ def robot_model_path(env: dict | None) -> str | None:
     return path if isinstance(path, str) and os.path.isfile(path) else None
 
 
+def _robot_model_record(robot: str) -> dict:
+    """The robot model file, and where to find it again: its path in the model repository, that repository's commit,
+    and whether the repository had uncommitted changes (the commit alone isn't the model then). The commit, path and
+    dirty flag are None when the file isn't tracked by git."""
+    folder = os.path.dirname(robot)
+    commit = _git_state(robot)["commit"]
+    tracked = commit is not None
+    return {
+        "file": os.path.basename(robot),
+        "path": _git(folder, "ls-files", "--full-name", "--", os.path.basename(robot)) if tracked else None,
+        "sha256": _sha256(robot),
+        "commit": commit,
+        # The whole repository, not just the urdf folder: the meshes the urdf loads sit next to it.
+        "dirty": bool(_git(folder, "status", "--porcelain", "--", ":/")) if tracked else None,
+    }
+
+
 def record_code_state(env: dict | None = None, loaded_checkpoint: str | None = None, package: str | None = None):
     """Describe the code a run is trained with. It holds hashes, not code or local paths, so it can be shared.
 
@@ -110,11 +127,7 @@ def record_code_state(env: dict | None = None, loaded_checkpoint: str | None = N
     isaaclab = importlib.util.find_spec("isaaclab")
     state["isaaclab_commit"] = _git_state(isaaclab.origin)["commit"] if isaaclab and isaaclab.origin else None
     robot = robot_model_path(env)
-    state["robot_model"] = (
-        {"file": os.path.basename(robot), "sha256": _sha256(robot), "commit": _git_state(robot)["commit"]}
-        if robot
-        else None
-    )
+    state["robot_model"] = _robot_model_record(robot) if robot else None
     state["packages"] = {name: _version(name) for name in PACKAGES}
     if loaded_checkpoint:
         state["loaded_checkpoint"] = loaded_checkpoint
@@ -510,6 +523,16 @@ def training_commit(run_dir: str) -> str | None:
     if len(records) != 1:
         return None
     return records[0]["commit"] + ("-dirty" if records[0].get("dirty") else "")
+
+
+def training_robot_model(run_dir: str) -> dict | None:
+    """The robot model a run was trained with, as ``code_state.yaml`` recorded it (file, path in the model repository,
+    sha256, commit, dirty); None when the run doesn't record one."""
+    path = os.path.join(run_dir, "params", CODE_STATE_FILE)
+    if not os.path.isfile(path):
+        return None
+    with open(path) as f:
+        return (yaml.safe_load(f) or {}).get("robot_model") or None
 
 
 def check_out_hint(run_dir: str) -> str:

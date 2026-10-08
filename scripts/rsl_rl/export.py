@@ -121,6 +121,7 @@ from cyclotron.code_state import (
     rebuild_differences,
     record_code_state,
     training_commit,
+    training_robot_model,
 )
 from cyclotron.onnx_export import (
     BUNDLE_YAMLS,
@@ -248,6 +249,7 @@ def gather_deploy_metadata(env, policy, run_dir: str, raw_action_clip: float | N
         decimation=env.unwrapped.cfg.decimation,
         observation_names=observation_names,
         trained_commit=training_commit(run_dir),
+        robot_model=training_robot_model(run_dir),
         trained_outside_cyclotron=trained_outside_cyclotron(run_dir),
     )
 

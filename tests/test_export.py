@@ -185,6 +185,18 @@ def test_deploy_metadata_round_trip_leaves_the_graph_unchanged(tmp_path, trained
     assert read["trained_commit"] == "32aef5c5ec11"
 
 
+def test_deploy_metadata_names_the_robot_model_the_run_was_trained_with():
+    robot = {"file": "asimov_1.urdf", "path": "sim-model/urdf/asimov_1.urdf", "sha256": "abc", "commit": "732cc60"}
+    read = sample_metadata(robot_model=robot)
+    assert read["robot_model_file"] == "sim-model/urdf/asimov_1.urdf" and read["robot_model_sha256"] == "abc"
+    assert read["robot_model_commit"] == "732cc60"
+    assert sample_metadata(robot_model={**robot, "dirty": True})["robot_model_commit"] == "732cc60-dirty"
+    # Not tracked by git: the file name and hash stay, there is no commit to name.
+    untracked = sample_metadata(robot_model={"file": "asimov_1.urdf", "path": None, "sha256": "abc", "commit": None})
+    assert untracked["robot_model_file"] == "asimov_1.urdf" and "robot_model_commit" not in untracked
+    assert not any(key.startswith("robot_model") for key in sample_metadata())
+
+
 def test_deploy_metadata_tags_a_policy_trained_outside_cyclotron():
     assert "trained_outside_cyclotron" not in sample_metadata()
     assert sample_metadata(trained_outside_cyclotron=True)["trained_outside_cyclotron"] == "true"

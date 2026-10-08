@@ -39,6 +39,7 @@ def deploy_metadata(
     decimation: int,
     observation_names: list[str],
     trained_commit: str | None,
+    robot_model: dict | None = None,
     trained_outside_cyclotron: bool = False,
 ) -> dict[str, str]:
     """The deployment contract of a policy, as the strings stored in ONNX metadata.
@@ -47,8 +48,9 @@ def deploy_metadata(
     are in, how raw actions become position targets (clamped to ``[-raw_action_clip, raw_action_clip]`` when the run
     set ``clip_actions``, then ``target = action * scale + offset``, then an optional ``[low, high]`` clip per joint),
     the PD gains the targets were trained to be tracked with, the rate the policy was trained to run at, the ordered
-    observation terms its input is built from, and the training commit for traceability. Training settings stay in
-    the yaml files next to the ONNX; they are not deployment inputs.
+    observation terms its input is built from, and, for traceability, the training commit and the robot model the run
+    was trained with (``robot_model`` as ``code_state.yaml`` records it). Training settings stay in the yaml files next
+    to the ONNX; they are not deployment inputs.
     """
     per_joint = [action_scale, action_offset, joint_stiffness, joint_damping]
     if any(len(values) != len(joint_names) for values in per_joint):
@@ -71,6 +73,12 @@ def deploy_metadata(
     }
     if trained_commit:
         metadata["trained_commit"] = trained_commit
+    if robot_model:
+        # The path in the model repository where the commit records it, else just the file name.
+        metadata["robot_model_file"] = robot_model.get("path") or robot_model["file"]
+        metadata["robot_model_sha256"] = robot_model["sha256"]
+        if robot_model.get("commit"):
+            metadata["robot_model_commit"] = robot_model["commit"] + ("-dirty" if robot_model.get("dirty") else "")
     if trained_outside_cyclotron:
         metadata["trained_outside_cyclotron"] = "true"
     return metadata

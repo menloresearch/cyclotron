@@ -36,6 +36,7 @@ from cyclotron.code_state import (
     record_code_state,
     training_code,
     training_commit,
+    training_robot_model,
     write_code_state,
 )
 
@@ -293,6 +294,51 @@ def test_code_state_records_the_robot_model_and_no_local_paths(tmp_path):
     text = (tmp_path / "params" / CODE_STATE_FILE).read_text()
     assert state["robot_model"]["file"] == "asimov_1.urdf" and str(tmp_path) not in text
     assert yaml.safe_load(text)["loaded_checkpoint"] == "2026-09-26_base/model_500.pt"
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="needs git")
+def test_robot_model_records_its_path_commit_and_whether_the_model_repository_is_dirty(tmp_path):
+    def git(*args):
+        return subprocess.run(["git", "-C", str(tmp_path), *args], check=True, capture_output=True, text=True).stdout
+
+    git("init", "-q")
+    git("config", "user.email", "test@example.com")
+    git("config", "user.name", "test")
+    git("config", "commit.gpgsign", "false")
+    (tmp_path / "sim-model" / "urdf").mkdir(parents=True)
+    (tmp_path / "sim-model" / "assets").mkdir()
+    urdf = tmp_path / "sim-model" / "urdf" / "asimov_1.urdf"
+    urdf.write_text("<robot/>")
+    (tmp_path / "sim-model" / "assets" / "leg.STL").write_text("mesh")
+    git("add", ".")
+    git("commit", "-q", "-m", "model")
+    env = {"scene": {"robot": {"spawn": {"asset_path": str(urdf)}}}}
+
+    robot = record_code_state(env)["robot_model"]
+    assert robot["file"] == "asimov_1.urdf" and robot["path"] == "sim-model/urdf/asimov_1.urdf"
+    assert robot["commit"] == git("rev-parse", "HEAD").strip() and robot["dirty"] is False
+
+    # A mesh next to the urdf changed: the commit alone isn't the model.
+    (tmp_path / "sim-model" / "assets" / "leg.STL").write_text("edited")
+    assert record_code_state(env)["robot_model"]["dirty"] is True
+
+
+def test_robot_model_outside_git_has_no_commit_path_or_dirty_flag(tmp_path):
+    urdf = tmp_path / "asimov_1.urdf"
+    urdf.write_text("<robot/>")
+    env = {"scene": {"robot": {"spawn": {"asset_path": str(urdf)}}}}
+    robot = record_code_state(env)["robot_model"]
+    assert robot["file"] == "asimov_1.urdf" and robot["sha256"]
+    assert robot["commit"] is None and robot["path"] is None and robot["dirty"] is None
+
+
+def test_training_robot_model_reads_the_run_record(tmp_path):
+    assert training_robot_model(str(tmp_path)) is None
+    robot = {"file": "asimov_1.urdf", "path": "urdf/asimov_1.urdf", "sha256": "abc", "commit": "123", "dirty": False}
+    write_code_state(str(tmp_path / "params"), {"robot_model": robot})
+    assert training_robot_model(str(tmp_path)) == robot
+    write_code_state(str(tmp_path / "params"), {"robot_model": None})
+    assert training_robot_model(str(tmp_path)) is None
 
 
 def test_remote_credentials_are_not_recorded():
