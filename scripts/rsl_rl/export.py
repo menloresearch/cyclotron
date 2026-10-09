@@ -368,8 +368,16 @@ def main():
         log("[WARNING] The current code has policy settings the run didn't save; they keep the current code's value:")
         for line in new:
             log(f"    {line}")
+        log("  They were added to the code after this run was trained, so its env.yaml and agent.yaml can't say what")
+        log("  they were. If these values reproduce how the run was trained (a new setting whose default keeps the old")
+        log("  behaviour), the export is right; otherwise it isn't the trained policy.")
+        log(f"  {check_out_hint(run_dir)}")
         if args_cli.strict:
-            log("[ERROR] Stopped by --strict: these settings don't come from the run (see above).")
+            log(
+                "[ERROR] Stopped by --strict: these settings don't come from the run (see above). Export from the"
+                " commit the run was trained with, or, once you have checked the values above, without --strict"
+                " (--share always uses --strict, so share from the training commit)."
+            )
             env.close()
             sys.exit(1)
     # Only the network's code can change what the weights compute without showing in the settings or the check at the
