@@ -41,6 +41,7 @@ def deploy_metadata(
     trained_commit: str | None,
     robot_model: dict | None = None,
     trained_outside_cyclotron: bool = False,
+    actor_code: str | None = None,
 ) -> dict[str, str]:
     """The deployment contract of a policy, as the strings stored in ONNX metadata.
 
@@ -49,8 +50,9 @@ def deploy_metadata(
     set ``clip_actions``, then ``target = action * scale + offset``, then an optional ``[low, high]`` clip per joint),
     the PD gains the targets were trained to be tracked with, the rate the policy was trained to run at, the ordered
     observation terms its input is built from, and, for traceability, the training commit and the robot model the run
-    was trained with (``robot_model`` as ``code_state.yaml`` records it). Training settings stay in the yaml files next
-    to the ONNX; they are not deployment inputs.
+    was trained with (``robot_model`` as ``code_state.yaml`` records it), and whether the code of the network
+    (``actor_code``: ``unchanged``, ``changed`` or ``unrecorded``) matched what the run was trained with. Training
+    settings stay in the yaml files next to the ONNX; they are not deployment inputs.
     """
     per_joint = [action_scale, action_offset, joint_stiffness, joint_damping]
     if any(len(values) != len(joint_names) for values in per_joint):
@@ -87,6 +89,8 @@ def deploy_metadata(
             metadata["robot_model_dirty"] = json.dumps(bool(robot_model["dirty"]))
     if trained_outside_cyclotron:
         metadata["trained_outside_cyclotron"] = "true"
+    if actor_code:
+        metadata["actor_code"] = actor_code
     return metadata
 
 

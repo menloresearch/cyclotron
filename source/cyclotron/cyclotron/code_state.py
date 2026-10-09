@@ -2,7 +2,8 @@
 
 Training writes ``params/code_state.yaml``: the git commit, a hash of every training-code file in the cyclotron
 package, the Isaac Lab commit, the robot model (its name, repository, urdf path, sha256, commit and dirty flag), the
-installed package versions, and the sha256 of the ``env.yaml`` and ``agent.yaml`` it wrote next to it, so editing
+installed package versions, the sha256 of the modules behind the network it deploys (``actor_code``), and the
+sha256 of the ``env.yaml`` and ``agent.yaml`` it wrote next to it, so editing
 those by hand later shows. Export and play compare the run's saved ``env.yaml``, ``agent.yaml`` and
 ``code_state.yaml`` with the current code, so a changed observation, action or network is reported instead of
 crashing or silently changing what the policy sees.
@@ -12,10 +13,13 @@ Plain Python with no Isaac Lab imports, so it can run without Isaac Sim and in t
 
 from __future__ import annotations
 
+import ast
 import glob
 import hashlib
+import importlib
 import importlib.metadata as metadata
 import importlib.util
+import inspect
 import os
 import re
 import subprocess
@@ -144,10 +148,86 @@ def urdf_filepath(robot_model: dict) -> str | None:
     return robot_model.get("urdf_filepath") or robot_model.get("file")
 
 
-def record_code_state(env: dict | None = None, loaded_checkpoint: str | None = None, package: str | None = None):
+def actor_class_name(agent: dict) -> str | None:
+    """The ``class_name`` of the network a run deploys: the actor, or the distilled student."""
+    model = "student" if agent.get("class_name") == "DistillationRunner" else "actor"
+    name = (agent.get(model) or {}).get("class_name")
+    return name if isinstance(name, str) else None
+
+
+def _top(module: str) -> str:
+    return module.split(".")[0]
+
+
+def _imported_modules(path: str, module: str) -> set[str]:
+    """The modules whose code the file ``path`` (module ``module``) imports: for ``from package import name``, the
+    module that defines ``name``, not the package that re-exports it."""
+    with open(path) as f:
+        tree = ast.parse(f.read())
+    found = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            found.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            base = node.module or ""
+            if node.level:
+                package = module if path.endswith("__init__.py") else module.rpartition(".")[0]
+                base = importlib.util.resolve_name("." * node.level + base, package)
+            for alias in node.names:
+                submodule = f"{base}.{alias.name}"
+                try:
+                    if importlib.util.find_spec(submodule) is not None:
+                        found.add(submodule)
+                        continue
+                except (ImportError, ValueError):
+                    pass
+                try:
+                    defined_in = inspect.getmodule(getattr(importlib.import_module(base), alias.name))
+                except (ImportError, AttributeError):
+                    defined_in = None
+                found.add(defined_in.__name__ if defined_in else base)
+    return found
+
+
+def actor_code(agent: dict) -> dict[str, str] | None:
+    """The sha256 of each module behind the network a run deploys, keyed by module name (``rsl_rl.models.mlp_model``):
+    the modules defining its class and the classes it inherits from, and the modules of those packages they import,
+    followed through. The rest of the library (the training algorithm, runners, storage) isn't included, so changing
+    it isn't a change to the exported policy.
+
+    None when the agent config names no network class, or the class can't be imported.
+    """
+    name = actor_class_name(agent)
+    if name is None:
+        return None
+    try:
+        from rsl_rl.utils import resolve_callable
+
+        cls = resolve_callable(name)
+    except (ImportError, AttributeError, ValueError, TypeError):
+        return None
+    packages = {"rsl_rl"} | {_top(c.__module__) for c in cls.__mro__ if _top(c.__module__) not in ("builtins", "torch")}
+    pending, hashes = [c.__module__ for c in cls.__mro__ if _top(c.__module__) in packages], {}
+    while pending:
+        module = pending.pop()
+        spec = importlib.util.find_spec(module) if module not in hashes else None
+        if spec is None or not spec.origin or not spec.origin.endswith(".py"):
+            continue
+        hashes[module] = _sha256(spec.origin)
+        pending += [m for m in _imported_modules(spec.origin, module) if _top(m) in packages and m not in hashes]
+    return dict(sorted(hashes.items()))
+
+
+def record_code_state(
+    env: dict | None = None,
+    loaded_checkpoint: str | None = None,
+    package: str | None = None,
+    agent: dict | None = None,
+):
     """Describe the code a run is trained with. It holds hashes, not code or local paths, so it can be shared.
 
-    ``env`` is the task's config as a dict, used to find the robot model the task loads.
+    ``env`` is the task's config as a dict, used to find the robot model the task loads. ``agent`` is the agent
+    config as a dict, used to find the code of the network the run deploys (``actor_code``).
     """
     package = package or package_dir()
     state = {"cyclotron": {**_git_state(package), "files": hash_files(package)}}
@@ -156,6 +236,9 @@ def record_code_state(env: dict | None = None, loaded_checkpoint: str | None = N
     robot = robot_model_path(env)
     state["robot_model"] = _robot_model_record(robot) if robot else None
     state["packages"] = {name: _version(name) for name in PACKAGES}
+    actor = actor_code(agent) if agent else None
+    if actor:
+        state["actor_code"] = actor
     if loaded_checkpoint:
         state["loaded_checkpoint"] = loaded_checkpoint
     return state
@@ -387,38 +470,6 @@ def _listing(names: list[str], limit: int = 8) -> str:
     return shown + (f" and {len(names) - limit} more" if len(names) > limit else "")
 
 
-def policy_code_files(env: dict, agent: dict) -> set[str]:
-    """The package files, named as ``code_state.yaml`` names them (``tasks/locomotion/mdp/observations.py``), that
-    define the functions and classes a run's policy settings (``policy_sections``) name: the package's code behind
-    what the policy sees and does. Functions from other packages, such as Isaac Lab's, come with that package's
-    version; helpers these files import aren't followed.
-
-    A module of a package that is no longer installed, such as this package's old name ``isaac_asimov``, counts as
-    this package's, by its path inside it.
-    """
-    package = os.path.basename(package_dir())
-    files = set()
-
-    def visit(value) -> None:
-        if isinstance(value, str) and _FUNCTION.fullmatch(value):
-            top, *path = value.split(":")[0].split(".")
-            if top == package or importlib.util.find_spec(top) is None:
-                files.add("/".join([*path, "__init__.py"]))
-                if path:
-                    files.add("/".join(path) + ".py")
-        elif isinstance(value, dict):
-            for key, item in value.items():
-                if key not in _IGNORED_KEYS:
-                    visit(item)
-        elif isinstance(value, (list, tuple)):
-            for item in value:
-                visit(item)
-
-    for path, _ in policy_sections(agent):
-        visit(lookup({"env": env, "agent": agent}, path))
-    return files
-
-
 def _among(path: str, files: set[str] | None) -> bool:
     """Whether a package file (``tasks/x.py``, or a repo path ending in it) is one of ``files``; None is all."""
     return files is None or path in files or any(path.endswith(f"/{name}") for name in files)
@@ -426,7 +477,7 @@ def _among(path: str, files: set[str] | None) -> bool:
 
 def compare_code_state(saved: dict, current: dict, files: set[str] | None = None) -> list[str]:
     """Describe, one line each, how the current code differs from a run's ``code_state.yaml``. ``files`` limits the
-    package files compared to those (``policy_code_files``); the rest is always compared."""
+    package files compared to those; the rest is always compared."""
     lines = []
     trained, now = saved.get("cyclotron") or {}, current["cyclotron"]
     before, after = trained.get("files") or {}, now["files"]
@@ -517,12 +568,38 @@ def _git_record_differences(run_dir: str, files: set[str] | None = None) -> list
 
 def code_differences(run_dir: str, current: dict, files: set[str] | None = None) -> list[str]:
     """Describe how the current code (``record_code_state()``) differs from the code a run was trained with.
-    ``files`` limits the package files compared (``policy_code_files``); None compares them all."""
+    ``files`` limits the package files compared; None compares them all."""
     path = os.path.join(run_dir, "params", CODE_STATE_FILE)
     if not os.path.isfile(path):
         return _git_record_differences(run_dir, files)
     with open(path) as f:
         return compare_code_state(yaml.safe_load(f) or {}, current, files)
+
+
+ACTOR_CODE_UNCHANGED, ACTOR_CODE_CHANGED, ACTOR_CODE_UNRECORDED = "unchanged", "changed", "unrecorded"
+
+
+def actor_code_differences(run_dir: str, agent: dict) -> tuple[str, list[str]]:
+    """Compare the code of the network a run deploys with what its ``code_state.yaml`` recorded (``actor_code``).
+
+    ``agent`` is the run's saved agent config. Returns ``(status, lines)``: ``"unchanged"``, ``"changed"`` with one
+    line per module that differs, or ``"unrecorded"`` when the run didn't record it (trained before training did, or
+    outside cyclotron), which can't be checked.
+    """
+    path = os.path.join(run_dir, "params", CODE_STATE_FILE)
+    recorded = None
+    if os.path.isfile(path):
+        with open(path) as f:
+            recorded = (yaml.safe_load(f) or {}).get("actor_code")
+    if not recorded:
+        return ACTOR_CODE_UNRECORDED, []
+    current = actor_code(agent)
+    if current is None:
+        return ACTOR_CODE_CHANGED, [f"the network class {actor_class_name(agent)} can't be imported by the current code"]
+    lines = [f"{name}: changed" for name in recorded if name in current and recorded[name] != current[name]]
+    lines += [f"{name}: added" for name in current if name not in recorded]
+    lines += [f"{name}: removed" for name in recorded if name not in current]
+    return (ACTOR_CODE_CHANGED, lines) if lines else (ACTOR_CODE_UNCHANGED, [])
 
 
 def training_code(run_dir: str) -> str | None:

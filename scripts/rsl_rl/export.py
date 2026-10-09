@@ -4,10 +4,10 @@ Writes ``policy.onnx``, a TorchScript ``policy.pt`` and copies of the run's ``en
 ``code_state.yaml``, so the folder holds the same files as a policy shared on the Hugging Face Hub. Runs Isaac Sim
 headless with one environment to build the policy, like a restart of the run: the policy settings are set back to
 the ones the run saved in its ``env.yaml`` and ``agent.yaml``, which are their only source (no overrides), and are
-checked against those files once the environment is built. Warns if code that can change the exported policy (the
-package files behind the policy settings, the robot model, Isaac Lab, library versions) changed since the run was
-trained, loads only the policy from the checkpoint, then checks that the ONNX file gives the same actions as the PyTorch
-policy. A run without ``env.yaml`` or ``agent.yaml`` can have them written from the current code, if you agree.
+checked against those files once the environment is built. Warns if the code of the policy's network (its rsl_rl model
+and the modules it uses, as ``code_state.yaml`` recorded them) changed since the run was trained, loads only the policy
+from the checkpoint, then checks that the ONNX file gives the same actions as the PyTorch policy. A run without
+``env.yaml`` or ``agent.yaml`` can have them written from the current code, if you agree.
 """
 
 import argparse
@@ -48,8 +48,8 @@ parser.add_argument(
 parser.add_argument(
     "--strict",
     action="store_true",
-    help="Stop, instead of warning, if code that can change the exported policy changed since the run was trained,"
-    " or anything else doesn't come from the run.",
+    help="Stop, instead of warning, if the code of the policy's network changed since the run was trained, or"
+    " anything else doesn't come from the run.",
 )
 AppLauncher.add_app_launcher_args(parser)
 args_cli, unknown_args = parser.parse_known_args()
@@ -108,18 +108,17 @@ from isaaclab_tasks.utils.parse_cfg import load_cfg_from_registry
 
 import cyclotron.tasks  # noqa: F401
 from cyclotron.code_state import (
+    ACTOR_CODE_CHANGED,
+    ACTOR_CODE_UNRECORDED,
     CODE_STATE_FILE,
     RUN_CONFIGS,
+    actor_code_differences,
     check_out_hint,
-    code_differences,
     current_code,
     edited_run_configs,
     load_policy,
     load_run_configs,
-    normalize_config,
-    policy_code_files,
     rebuild_differences,
-    record_code_state,
     training_commit,
     training_robot_model,
 )
@@ -145,10 +144,10 @@ from cyclotron.run_config import (
 
 installed_version = metadata.version("rsl-rl-lib")
 
-CODE_CHANGE_CONSEQUENCE = (
-    "The policy settings come from the run's env.yaml and agent.yaml, but the code behind them is the current code."
-    " Only code that can change the exported policy is listed: the package files defining the functions the policy"
-    " settings name, the robot model, Isaac Lab and the library versions."
+ACTOR_CODE_CONSEQUENCE = (
+    "The weights are the run's, but the network that runs them is the current code, so the exported policy may"
+    " compute something else. Only the code of the network is compared (its rsl_rl model and the modules it uses),"
+    " not the rest of the library or of this package."
 )
 
 
@@ -198,10 +197,13 @@ def _configured_offset(term) -> list[float]:
     return [pose[int(i)] for i in joint_ids]
 
 
-def gather_deploy_metadata(env, policy, run_dir: str, raw_action_clip: float | None, log) -> dict[str, str] | None:
+def gather_deploy_metadata(
+    env, policy, run_dir: str, raw_action_clip: float | None, actor_code: str, log
+) -> dict[str, str] | None:
     """Resolve the deployment contract from the live environment, or None (with a message) if an action term
     is not a joint position action and the contract cannot describe it. ``raw_action_clip`` is the run's
-    ``clip_actions``, which rsl_rl's environment wrapper applies to the raw actions."""
+    ``clip_actions``, which rsl_rl's environment wrapper applies to the raw actions. ``actor_code`` is whether the
+    network's code matches the run's (``actor_code_differences``)."""
     from isaaclab.envs.mdp.actions import JointPositionAction
 
     manager = getattr(env.unwrapped, "action_manager", None)
@@ -251,6 +253,7 @@ def gather_deploy_metadata(env, policy, run_dir: str, raw_action_clip: float | N
         trained_commit=training_commit(run_dir),
         robot_model=training_robot_model(run_dir),
         trained_outside_cyclotron=trained_outside_cyclotron(run_dir),
+        actor_code=actor_code,
     )
 
 
@@ -367,19 +370,25 @@ def main():
             log("[ERROR] Stopped by --strict: these settings don't come from the run (see above).")
             env.close()
             sys.exit(1)
-    # Rewards, the training algorithm and the like can't change what is exported, so they aren't compared here.
-    behind_settings = policy_code_files(*saved_configs)
-    code = code_differences(run_dir, record_code_state(normalize_config(env_dict)), behind_settings)
-    if code:
-        log("[WARNING] Code behind the policy settings changed since this run was trained:")
-        for line in code:
+    # Only the network's code can change what the weights compute without showing in the settings or the check at the
+    # end; rewards, observation functions and the rest of the library can't change what is exported.
+    actor_code, actor_changes = actor_code_differences(run_dir, saved_configs[1])
+    if actor_code == ACTOR_CODE_CHANGED:
+        log("[WARNING] The code of the policy's network changed since this run was trained:")
+        for line in actor_changes:
             log(f"    {line}")
-        log(f"  {CODE_CHANGE_CONSEQUENCE}")
+        log(f"  {ACTOR_CODE_CONSEQUENCE}")
         log(f"  For the exact training code: {check_out_hint(run_dir)}")
         if args_cli.strict:
-            log("[ERROR] Stopped by --strict: code behind the policy settings changed since training (see above).")
+            log("[ERROR] Stopped by --strict: the code of the policy's network changed since training (see above).")
             env.close()
             sys.exit(1)
+    elif actor_code == ACTOR_CODE_UNRECORDED and not trained_outside_cyclotron(run_dir):
+        # A run without code_state.yaml was warned about above; this one has it but recorded no network code.
+        log(
+            f"[WARNING] The run's {CODE_STATE_FILE} records no network code (it was trained before training recorded"
+            " it), so changes to the network since training can't be detected. Never a stop, also with --strict."
+        )
     if isinstance(env.unwrapped, DirectMARLEnv):
         env = multi_agent_to_single_agent(env)
     env = RslRlVecEnvWrapper(env, clip_actions=agent_cfg.clip_actions)
@@ -412,7 +421,7 @@ def main():
         for name in missing:
             log(f"[WARNING] {run_dir}/params/{name} not found; the viewer and --share need it next to policy.onnx.")
 
-        deploy = gather_deploy_metadata(env, policy, run_dir, agent_cfg.clip_actions, log)
+        deploy = gather_deploy_metadata(env, policy, run_dir, agent_cfg.clip_actions, actor_code, log)
         if deploy is not None:
             attach_deploy_metadata(onnx_path, deploy)
             log(f"[INFO] Attached deploy metadata to policy.onnx: {', '.join(deploy)}, obs_dim, action_dim.")
@@ -442,8 +451,8 @@ def main():
         log(f"[WARNING] {' and '.join(from_code)} came from the current code, not from training.")
     if new:
         log("[WARNING] The current code has policy settings the run didn't save; see the warning before the export.")
-    if code:
-        log("[WARNING] Code behind the policy settings changed since training; see the warning before the export.")
+    if actor_code == ACTOR_CODE_CHANGED:
+        log("[WARNING] The code of the policy's network changed since training; see the warning before the export.")
 
 
 if __name__ == "__main__":

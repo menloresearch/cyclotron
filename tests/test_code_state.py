@@ -16,6 +16,8 @@ from cyclotron.code_state import (
     _git_state,
     _short,
     _without_credentials,
+    actor_code,
+    actor_code_differences,
     code_differences,
     compare_code_state,
     describe_changes,
@@ -28,7 +30,6 @@ from cyclotron.code_state import (
     load_policy,
     load_run_configs,
     normalize_config,
-    policy_code_files,
     policy_interface,
     policy_shape_errors,
     read_git_records,
@@ -256,15 +257,39 @@ def test_compare_code_state_lists_files_dependencies_and_versions(tmp_path):
     ]
 
 
-def test_policy_code_files_are_the_package_files_behind_the_policy_settings():
-    env, agent = make_env(), make_agent()
-    files = {"tasks/locomotion/mdp/observations.py", "tasks/locomotion/mdp/observations/__init__.py"}
-    # Isaac Lab's functions (the other terms, the action and actuator classes) come with Isaac Lab's commit.
-    assert policy_code_files(env, agent) == files
-    # Runs trained under the package's old name, which is no longer installed, name the same files.
-    func = env["observations"]["policy"]["base_ang_vel"]["func"]
-    env["observations"]["policy"]["base_ang_vel"]["func"] = func.replace("cyclotron.", "isaac_asimov.")
-    assert policy_code_files(env, agent) == files
+def test_actor_code_hashes_the_network_modules_and_not_the_rest_of_the_library():
+    modules = actor_code(make_agent())
+    assert {"rsl_rl.models.mlp_model", "rsl_rl.modules.mlp", "rsl_rl.modules.normalization"} <= set(modules)
+    assert not {name for name in modules if name.startswith(("rsl_rl.algorithms", "rsl_rl.runners"))}
+    # A recurrent actor adds its memory module; the distilled student is found under its own key.
+    agent = make_agent()
+    agent["actor"]["class_name"] = "RNNModel"
+    assert "rsl_rl.modules.rnn" in actor_code(agent)
+    student = {"class_name": "DistillationRunner", "student": {"class_name": "MLPModel"}}
+    assert "rsl_rl.models.mlp_model" in actor_code(student)
+    assert actor_code({"actor": {}}) is None and actor_code({"actor": {"class_name": "NoSuchModel"}}) is None
+
+
+def test_actor_code_differences_compare_with_what_the_run_recorded(tmp_path, monkeypatch):
+    agent = make_agent()
+    # Runs that recorded no network code, or no code_state.yaml at all, can't be checked.
+    assert actor_code_differences(str(tmp_path), agent) == ("unrecorded", [])
+    write_code_state(str(tmp_path / "params"), record_code_state(make_env()))
+    assert actor_code_differences(str(tmp_path), agent) == ("unrecorded", [])
+
+    write_code_state(str(tmp_path / "params"), record_code_state(make_env(), agent=agent))
+    assert actor_code_differences(str(tmp_path), agent) == ("unchanged", [])
+
+    recorded = actor_code(agent)
+    monkeypatch.setattr(
+        "cyclotron.code_state.actor_code",
+        lambda _: {**recorded, "rsl_rl.modules.mlp": "0" * 64, "rsl_rl.modules.extra": "1" * 64},
+    )
+    status, lines = actor_code_differences(str(tmp_path), agent)
+    assert status == "changed"
+    assert lines == ["rsl_rl.modules.mlp: changed", "rsl_rl.modules.extra: added"]
+    monkeypatch.setattr("cyclotron.code_state.actor_code", lambda _: None)
+    assert actor_code_differences(str(tmp_path), agent)[0] == "changed"
 
 
 def test_compare_code_state_can_be_limited_to_the_files_behind_the_policy_settings(tmp_path):

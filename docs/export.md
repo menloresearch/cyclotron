@@ -120,10 +120,12 @@ flowchart TD
         C10b -->|"yes, --strict"| E10b["Stop"]
         C10b -->|"yes"| W10["Warn: they keep the<br/>code's value"]
         C10b -->|no| C11
-        W10 --> C11{"11. Code behind the settings<br/>changed since training?"}
+        W10 --> C11{"11. Code of the policy's network<br/>changed since training?"}
         C11 -->|"yes, --strict"| E11["Stop"]
         C11 -->|yes| W11["Warn: list changes and<br/>the commit to check out"]
+        C11 -->|"not recorded"| N11["Warn once<br/>(never stops)"]
         C11 -->|no| Load["Load only the actor<br/>from the checkpoint"]
+        N11 --> Load
         W11 --> Load
         Load --> C12{"12. Checkpoint weights fit<br/>the network?"}
         C12 -->|no| E12["Stop: names each layer<br/>and size"]
@@ -145,7 +147,7 @@ flowchart TD
 
     class E1,E2,E3,E4,E6,E7,E7b,E9,E10,E10b,E11,E12,E14 stop
     class A7 ask
-    class N6,W10,W11,W13,C8 warn
+    class N6,W10,W11,N11,W13,C8 warn
     class Done done
 ```
 
@@ -219,20 +221,24 @@ These take a second, so a typo doesn't cost an Isaac Sim launch.
     run didn't save (added since training), which keep the code's value: `The
     current code has policy settings the run didn't save; …`. **`--strict`
     stops on those.**
-11. **The code behind the settings is unchanged.** Compares the run's
-    `code_state.yaml` with the code you have checked out, limited to what can
-    change the exported policy: the cyclotron files that define the functions
-    and classes the policy settings name (the file a function is defined in,
-    not helpers it imports), the robot model, Isaac Lab's commit and the
-    `isaacsim`, `isaaclab`, `rsl-rl-lib` and `torch` versions. Runs trained
-    before `code_state.yaml` existed are compared with the commits rsl_rl
-    logged in their `git/` folder instead, which can only list changed files,
-    or say they "can't be listed" when the commit isn't in this clone. Warns
-    with each change and the commit to check out for the exact training code:
-    `Code behind the policy settings changed since this run was trained:`.
-    **`--strict` stops.** Rewards, the training algorithm, configs and docs
-    can't change an export and aren't compared; `--play` still lists them (see
+11. **The code of the policy's network is unchanged.** Training records the
+    sha256 of the modules behind the actor in `code_state.yaml`
+    (`actor_code`): the rsl_rl model class the run uses (`MLPModel`,
+    `RNNModel`, ...), the classes it inherits from, and the modules they
+    import (the MLP, the normalizer, the memory module). Export hashes the
+    same modules in the code you have installed and compares. This is the one
+    thing the later checks can't see: the weights load and the ONNX file
+    agrees with the PyTorch policy, because both are built by the same
+    changed code. Warns with each module that differs and the commit to check
+    out for the exact training code: `The code of the policy's network changed
+    since this run was trained:`. **`--strict` stops.** Nothing else is
+    compared: not the rest of rsl_rl, not this package's files, Isaac Lab, the
+    robot model or the library versions, so updating them doesn't block an
+    export. `--play` still lists them (see
     [Code changes since training](../README.md#code-changes-since-training)).
+    A run that recorded no network code (trained before it was recorded, or
+    outside cyclotron) can't be checked: one warning, never a stop, also with
+    `--strict`. The result goes into the deploy metadata as `actor_code`.
 12. **The checkpoint fits the network.** Stops when the actor's weights don't
     fit the network built from the run's settings, naming each layer and
     size, for example when an observation function now returns more values:
@@ -277,7 +283,7 @@ step 12 turns into a message naming the layers and sizes that don't fit.
 | `--load_run` | Run folder to export from. Defaults to the latest. |
 | `--experiment_name` | Experiment folder under `logs/rsl_rl/`. Defaults to the task's. |
 | `--output` | Folder to write to. Defaults to `<checkpoint folder>/exported`. |
-| `--strict` | Stop instead of asking or warning in [checks](#checks-step-by-step) 7, 10 and 11: a missing `env.yaml`/`agent.yaml`, policy settings the run didn't save, and changes to the code behind the settings. |
+| `--strict` | Stop instead of asking or warning in [checks](#checks-step-by-step) 7, 10 and 11: a missing `env.yaml`/`agent.yaml`, policy settings the run didn't save, and changes to the code of the policy's network. |
 | `--device` | Device to run the export on (an AppLauncher flag; the export always runs headless). |
 
 Other than Isaac Lab's AppLauncher flags, nothing else is accepted: setting overrides such as
@@ -310,6 +316,7 @@ that read no metadata run the file unchanged, since the graph is untouched.
 | `sim_dt`, `decimation`, `policy_rate_hz` | float, int, float | The policy step: it was trained to act every `sim_dt x decimation` seconds. |
 | `observation_names` | JSON list of strings | The policy's input terms in order, as named in `env.yaml` (`<group>/<term>` when the actor reads several groups). The per-term recipe stays in `env.yaml`. |
 | `trained_outside_cyclotron` | `"true"`, absent otherwise | Set when the run has no `code_state.yaml`, which cyclotron's training always writes: a checkpoint trained outside cyclotron, or a cyclotron run from before training recorded one (the two can't be told apart). Nothing could check the export against the code it was trained with. |
+| `actor_code` | `"unchanged"`, `"changed"`, `"unrecorded"` | Whether the code of the policy's network matched what `code_state.yaml` recorded at training (check 11). `"unrecorded"`: the run recorded none, so it couldn't be checked. `"changed"` only appears in a file from a plain `--export`, since `--strict` (and so `--share`) stops on it. |
 | `trained_commit` | string, absent when unknown | The commit the run was trained with, from `code_state.yaml` (or the run's `git/` records), for traceability. Ends in `-dirty`, as `git describe --dirty` does, when the run had uncommitted changes, so the commit alone isn't its code. |
 | `robot_model_name`, `robot_model_repo`, `robot_model_urdf_filepath`, `robot_model_sha256`, `robot_model_commit`, `robot_model_dirty` | strings (`robot_model_dirty` is JSON `true`/`false`); each absent when the run doesn't record it | The robot model the run was trained with, from `code_state.yaml`: the robot's name, from the `name` of the urdf's `<robot>` element (`asimov_1`), the model repository as `<owner>/<name>` of its `origin` remote (`menloresearch/asimov-1`), the urdf's path from that repository's root (`sim-model/urdf/asimov_1.urdf`), the urdf's sha256, the repository's commit, and whether the repository had uncommitted changes at training. Check out the commit and hash the urdf to get the exact model back; with `robot_model_dirty` true, the commit alone isn't it. When git doesn't track the urdf, the path is just its file name and the repository, commit and dirty keys are absent. |
 
@@ -390,10 +397,10 @@ Every such export warns about it, and the ONNX deploy metadata carries
 
 What to expect with a foreign run:
 
-- The code-change check cannot find `params/code_state.yaml` and falls back
-  to the `git/*.diff` records rsl_rl wrote. Commits from another repository
-  are not in this clone, so it reports that changes "can't be listed" — a
-  warning, and the export proceeds (`--strict` would stop on it).
+- The network-code check finds no `params/code_state.yaml`, so it can't
+  compare anything: the run is reported as trained outside cyclotron, the
+  metadata says `actor_code: unrecorded`, and the export proceeds, also with
+  `--strict` and `--share`.
 - The policy settings are rebuilt from the run's `env.yaml` and `agent.yaml`
   as for local runs. A function the run used from a package that isn't
   installed here, and that this checkout has under no other module, stops the

@@ -198,7 +198,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         dump_yaml(os.path.join(log_dir, "params", "agent.yaml"), agent_cfg)
         # What --export and --play compare against to warn about code changes; <run>/<file>, not a local path.
         loaded = os.path.join(*resume_path.split(os.sep)[-2:]) if loads_checkpoint else None
-        code_state = record_code_state(class_to_dict(env_cfg), loaded_checkpoint=loaded)
+        code_state = record_code_state(class_to_dict(env_cfg), loaded_checkpoint=loaded, agent=class_to_dict(agent_cfg))
         # The sha256 of the two files just written, so --export and --share notice if they are edited later.
         code_state["run_configs"] = hash_run_configs(os.path.join(log_dir, "params"))
         write_code_state(os.path.join(log_dir, "params"), code_state)

@@ -219,6 +219,12 @@ def test_deploy_metadata_names_the_robot_model_the_run_was_trained_with():
     assert not any(key.startswith("robot_model") for key in sample_metadata())
 
 
+def test_deploy_metadata_says_whether_the_network_code_matched_the_run():
+    assert "actor_code" not in sample_metadata()
+    assert sample_metadata(actor_code="unchanged")["actor_code"] == "unchanged"
+    assert sample_metadata(actor_code="unrecorded")["actor_code"] == "unrecorded"
+
+
 def test_deploy_metadata_tags_a_policy_trained_outside_cyclotron():
     assert "trained_outside_cyclotron" not in sample_metadata()
     assert sample_metadata(trained_outside_cyclotron=True)["trained_outside_cyclotron"] == "true"
