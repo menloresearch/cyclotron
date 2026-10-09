@@ -199,8 +199,9 @@ them, such as the observation functions and the robot model, is still the
 current one. Training therefore writes `params/code_state.yaml` next to
 `env.yaml` and `agent.yaml`: the git commit and branch, a hash of every
 training-code file in the cyclotron package, the Isaac Lab commit, a hash of
-the robot model, and the `isaacsim`, `isaaclab`, `rsl-rl-lib` and `torch`
-versions. It holds hashes, not code. It also records the sha256 of the
+the robot model, the `isaacsim`, `isaaclab`, `rsl-rl-lib` and `torch`
+versions, and a hash of each rsl_rl module behind the policy's network
+(`actor_code`). It holds hashes, not code. It also records the sha256 of the
 `env.yaml` and `agent.yaml` written next to it: they are the record of how the
 run was trained, so `--export` and `--share` refuse a run whose files no
 longer match (edited by hand, or deleted).
@@ -215,17 +216,19 @@ code and print what changed:
   override path, for example
   `env.observations.policy.base_ang_vel.scale: 0.25 -> 0.5`, so you can pass
   the trained value back on the command line. `--export` has set them back
-  already, so for it any difference means the rebuild failed and stops the
-  export; only settings the run didn't save are listed as warnings. Critic and
+  already, so for it a saved setting that still differs means the current
+  code changes it while building, and stops the export; settings the run
+  didn't save (added to the code since training) are warnings. Critic and
   AMP inputs, rewards, events, terrain, command ranges and observation noise
   are not compared: they only shape training, and the play tasks change some
   of them.
 - **Code**: cyclotron files that changed, and changes to Isaac Lab, the robot
   model or the package versions. Runs trained before `code_state.yaml` existed
   are compared with the commits rsl_rl logged in the run's `git/` folder.
-  `--export` lists only the code that can change an exported policy: the
-  cyclotron files defining the functions the policy settings name, plus the
-  robot model, Isaac Lab and the package versions.
+  This list is `--play`'s. `--export` compares only the code of the policy's
+  network (`actor_code`): it is the one change the export's later checks
+  can't see, since the weights load and the ONNX file agrees with the
+  changed code (check 11 in [export.md](docs/export.md#checks-step-by-step)).
 
 Code changes are warnings, since experiments change code on purpose; add
 `--strict` to stop instead. A checkpoint whose policy no longer fits the
@@ -233,6 +236,8 @@ network always stops, for example because an observation term was added and
 the input size changed. For `--play`, so does a changed actor class or
 activation, which would load the old weights but compute something else;
 `--export` takes those from the run's `agent.yaml`, so they can't change.
+[Examples, check by check](docs/export.md#examples-check-by-check) shows what
+each export check catches.
 
 Export and play load only the policy from the checkpoint. The critic and the
 AMP discriminator are only used in training, so a run whose critic saw extra
@@ -252,7 +257,8 @@ This uploads `agent.yaml`, `env.yaml`, `policy.onnx`, `code_state.yaml` (for
 runs that have one) and a generated `README.md` model card (BSD-3-Clause, `library_name: asimov`,
 `pipeline_tag: robotics`). Sharing publishes the policy, so the checkpoint is
 always re-exported first with [`--export`](docs/export.md)'s `--strict` checks:
-a code change since training stops the upload instead of warning, and an
+a change to the code of the policy's network, or policy settings the run
+didn't save, stop the upload instead of warning, and an
 `exported/policy.onnx` already on disk is never uploaded (pass `--onnx <file>`
 to upload a file as is). Use `--checkpoint` to share a
 different checkpoint (a full path, or a filename inside the run directory). Use `--title "<text>"` to set the card's title,
