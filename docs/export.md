@@ -115,8 +115,8 @@ flowchart TD
     Env --> C10
 
     subgraph after ["Will the run's weights drive the policy it was trained with?"]
-        C10{"10. Built environment uses<br/>the run's saved settings?"} -->|differ| E10["Stop: names each setting<br/>and the commit to check out"]
-        C10 -->|match| C10b{"Current code has settings<br/>the run didn't save?"}
+        C10{"10a. Every saved setting in the<br/>environment, with its saved value?"} -->|no| E10["Stop: names each setting<br/>and the commit to check out"]
+        C10 -->|yes| C10b{"10b. Any extra settings<br/>the run didn't save?"}
         C10b -->|"yes, --strict"| E10b["Stop"]
         C10b -->|"yes"| W10["Warn: they keep the<br/>code's value"]
         C10b -->|no| C11
@@ -212,20 +212,27 @@ These take a second, so a typo doesn't cost an Isaac Sim launch.
 
 ### After building the environment
 
-10. **The built environment uses the run's settings.** Compares the policy
-    settings of the built environment with `env.yaml` and `agent.yaml`. Stops
-    on any difference: `The rebuilt policy settings don't match the run's
-    env.yaml and agent.yaml:`, one line per setting. A difference means the
-    current code changes a saved setting while it builds the environment (a
-    config that computes a value from others, for example), so the policy
-    would see something other than what it was trained with. To fix it, check
-    out the commit the message names, the one the run was trained with, and
-    export from there, or train a new run with the current code. Notes `Checked
-    the rebuilt policy settings against the run's env.yaml and agent.yaml:
-    they match.` otherwise. Warns about settings the current code has but the
-    run didn't save (added since training), which keep the code's value: `The
-    current code has policy settings the run didn't save; …`. **`--strict`
-    stops on those.**
+10. **The built environment uses the run's settings, and only those.** The
+    policy settings of the built environment are compared with `env.yaml` and
+    `agent.yaml` in two directions:
+    - **10a. Every saved setting is in the environment, with its saved
+      value.** Stops on any difference: `The rebuilt policy settings don't
+      match the run's env.yaml and agent.yaml:`, one line per setting. A
+      difference means the current code changes a saved setting while it
+      builds the environment (a config that computes a value from others, for
+      example), so the policy would see something other than what it was
+      trained with. To fix it, check out the commit the message names, the one
+      the run was trained with, and export from there, or train a new run with
+      the current code. Notes `Checked the rebuilt policy settings against the
+      run's env.yaml and agent.yaml: they match.` otherwise.
+    - **10b. The environment has no settings the run didn't save.** 10a can
+      only check settings the yaml contains. A setting added to the code after
+      training has no line in the yaml, so it can't be matched and takes the
+      current code's value, which may not be what the run was trained with.
+      Warns with each one: `The current code has policy settings the run
+      didn't save; …`. **`--strict` stops on those.** To fix it, check out the
+      commit the run was trained with, or confirm the new settings' values
+      reproduce the old behaviour and export without `--strict`.
 11. **The code of the policy's network is unchanged.** Training records the
     sha256 of the modules behind the actor in `code_state.yaml`
     (`actor_code`): the rsl_rl model class the run uses (`MLPModel`,
@@ -288,7 +295,7 @@ step 12 turns into a message naming the layers and sizes that don't fit.
 | `--load_run` | Run folder to export from. Defaults to the latest. |
 | `--experiment_name` | Experiment folder under `logs/rsl_rl/`. Defaults to the task's. |
 | `--output` | Folder to write to. Defaults to `<checkpoint folder>/exported`. |
-| `--strict` | Stop instead of asking or warning in [checks](#checks-step-by-step) 7, 10 and 11: a missing `env.yaml`/`agent.yaml`, policy settings the run didn't save, and changes to the code of the policy's network. |
+| `--strict` | Stop instead of asking or warning in [checks](#checks-step-by-step) 7, 10b and 11: a missing `env.yaml`/`agent.yaml`, policy settings the run didn't save, and changes to the code of the policy's network. |
 | `--device` | Device to run the export on (an AppLauncher flag; the export always runs headless). |
 
 Other than Isaac Lab's AppLauncher flags, nothing else is accepted: setting overrides such as
