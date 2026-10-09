@@ -35,31 +35,23 @@ parser.add_argument(
     "--target", type=str, default=None, help="Direct path to the checkpoint file to play (alias for --checkpoint)."
 )
 parser.add_argument(
-    "--onnx-output",
-    "--onnx_output",
-    dest="onnx_output",
-    type=str,
-    default=None,
-    help="Optional extra ONNX export target. Accepts either a full .onnx file path or a directory path.",
-)
-parser.add_argument(
-    "--onnx-filename",
-    "--onnx_filename",
-    dest="onnx_filename",
-    type=str,
-    default="policy.onnx",
-    help="ONNX filename used when --onnx-output is a directory.",
-)
-parser.add_argument(
-    "--export-only",
-    "--export_only",
-    dest="export_only",
-    action="store_true",
-    help="Exit after exporting the policy instead of running the simulation loop.",
+    "--strict", action="store_true", help="Stop, instead of warning, if the code changed since the run was trained."
 )
 cli_args.add_rsl_rl_args(parser)
 AppLauncher.add_app_launcher_args(parser)
 args_cli, hydra_args = parser.parse_known_args()
+# Unknown flags go to Hydra, which would only reject these after Isaac Sim has started.
+REMOVED_EXPORT_FLAGS = (
+    "--export-only",
+    "--export_only",
+    "--onnx-output",
+    "--onnx_output",
+    "--onnx-filename",
+    "--onnx_filename",
+)
+removed = [arg.split("=")[0] for arg in hydra_args if arg.split("=")[0] in REMOVED_EXPORT_FLAGS]
+if removed:
+    sys.exit(f"[ERROR] {removed[0]} was removed from --play, which no longer writes ONNX. Use ./cyclotron.sh --export.")
 if args_cli.target and not args_cli.checkpoint:
     args_cli.checkpoint = args_cli.target
 if args_cli.video:
@@ -85,6 +77,7 @@ import gymnasium as gym
 import torch
 from rsl_rl.runners import DistillationRunner, OnPolicyRunner
 
+import isaaclab_tasks  # noqa: F401
 from isaaclab.envs import (
     DirectMARLEnv,
     DirectMARLEnvCfg,
@@ -92,21 +85,25 @@ from isaaclab.envs import (
     ManagerBasedRLEnvCfg,
     multi_agent_to_single_agent,
 )
-from isaaclab.utils.dict import print_dict
-
+from isaaclab.utils.dict import class_to_dict, print_dict
 from isaaclab_rl.rsl_rl import (
     RslRlBaseRunnerCfg,
     RslRlVecEnvWrapper,
-    export_policy_as_jit,
-    export_policy_as_onnx,
     handle_deprecated_rsl_rl_cfg,
     handle_deprecated_rsl_rl_checkpoint,
 )
 from isaaclab_rl.utils.pretrained_checkpoint import get_published_pretrained_checkpoint
-
-import isaaclab_tasks  # noqa: F401
-import cyclotron.tasks  # noqa: F401
 from isaaclab_tasks.utils.hydra import hydra_task_config
+
+import cyclotron.tasks  # noqa: F401
+from cyclotron.code_state import check_out_hint, describe_changes
+from cyclotron.policy_io import resolve_policy_io
+from cyclotron.policy_loading import load_policy
+
+CODE_CHANGE_CONSEQUENCE = (
+    "--play runs the checkpoint in an environment built from the current code, so it may behave differently than in"
+    " training."
+)
 
 
 @hydra_task_config(args_cli.task, args_cli.agent)
@@ -138,6 +135,24 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     env_cfg.log_dir = log_dir
 
     env = gym.make(args_cli.task, cfg=env_cfg, render_mode="rgb_array" if args_cli.video else None)
+    # Compared where train.py saves params/: after the environment is created, which resolves parts of the config.
+    agent_dict = class_to_dict(agent_cfg)
+    changes, level = describe_changes(
+        log_dir,
+        class_to_dict(env_cfg),
+        agent_dict,
+        CODE_CHANGE_CONSEQUENCE,
+        policy_io=resolve_policy_io(env.unwrapped, agent_dict),
+    )
+    print(changes)
+    if level == "error":
+        env.close()
+        sys.exit(1)
+    if level == "warning" and args_cli.strict:
+        # Isaac Sim replaces sys.exit with a version that only takes an exit code, so the message is printed first.
+        print("[ERROR] Stopped by --strict: the code changed since the run was trained (see above).")
+        env.close()
+        sys.exit(1)
 
     if isinstance(env.unwrapped, DirectMARLEnv):
         env = multi_agent_to_single_agent(env)
@@ -163,46 +178,21 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     else:
         raise ValueError(f"Unsupported runner class: {agent_cfg.class_name}")
     resume_path = handle_deprecated_rsl_rl_checkpoint(resume_path, installed_version)
-    runner.load(resume_path)
+    try:
+        load_policy(runner, resume_path, agent_cfg.class_name, check_out_hint(log_dir))
+    except ValueError as error:
+        print(f"[ERROR] {error}")
+        env.close()
+        sys.exit(1)
 
     policy = runner.get_inference_policy(device=env.unwrapped.device)
 
-    export_model_dir = os.path.join(os.path.dirname(resume_path), "exported")
-
-    if version.parse(installed_version) >= version.parse("4.0.0"):
-        runner.export_policy_to_jit(path=export_model_dir, filename="policy.pt")
-        runner.export_policy_to_onnx(path=export_model_dir, filename="policy.onnx")
-    else:
+    # Older RSL-RL versions reset the policy network itself between episodes.
+    if version.parse(installed_version) < version.parse("4.0.0"):
         if version.parse(installed_version) >= version.parse("2.3.0"):
             policy_nn = runner.alg.policy
         else:
             policy_nn = runner.alg.actor_critic
-
-        if hasattr(policy_nn, "actor_obs_normalizer"):
-            normalizer = policy_nn.actor_obs_normalizer
-        elif hasattr(policy_nn, "student_obs_normalizer"):
-            normalizer = policy_nn.student_obs_normalizer
-        else:
-            normalizer = None
-
-        export_policy_as_jit(policy_nn, normalizer=normalizer, path=export_model_dir, filename="policy.pt")
-        export_policy_as_onnx(policy_nn, normalizer=normalizer, path=export_model_dir, filename="policy.onnx")
-
-    if args_cli.onnx_output:
-        onnx_target = os.path.abspath(os.path.expanduser(args_cli.onnx_output))
-        if onnx_target.endswith(".onnx"):
-            onnx_dir, onnx_filename = os.path.dirname(onnx_target), os.path.basename(onnx_target)
-        else:
-            onnx_dir, onnx_filename = onnx_target, args_cli.onnx_filename
-        if version.parse(installed_version) >= version.parse("4.0.0"):
-            runner.export_policy_to_onnx(path=onnx_dir, filename=onnx_filename)
-        else:
-            export_policy_as_onnx(policy_nn, normalizer=normalizer, path=onnx_dir, filename=onnx_filename)
-        print(f"[INFO] Exported ONNX policy to: {os.path.join(onnx_dir, onnx_filename)}")
-
-    if args_cli.export_only:
-        env.close()
-        return
 
     dt = env.unwrapped.step_dt
 
