@@ -133,7 +133,7 @@ flowchart TD
     Write --> C13
 
     subgraph files ["Is policy.onnx faithful to the checkpoint and deployable?"]
-        C13{"13. All action terms are<br/>joint position actions?"} -->|yes| Meta["Attach the deploy metadata"]
+        C13{"13. Are the actions joint position<br/>targets the metadata can describe?<br/>(no for direct-workflow envs)"} -->|yes| Meta["Attach the deploy metadata"]
         C13 -->|no| W13["Warn: no deploy metadata"]
         Meta --> C14
         W13 --> C14{"14. policy.onnx gives the<br/>checkpoint's actions<br/>within 1e-4?"}
