@@ -38,7 +38,8 @@ pass `--task <id>` by hand, or add the entry — step 5 of
 [Designing your own task](designing-your-own-task.md).
 
 Each `--export` entry below names its check in [export.md](export.md#checks-step-by-step),
-whose diagram shows where it stops. The run folder's `exported/export.log`
+whose diagram shows where it stops; [Examples, check by check](export.md#examples-check-by-check)
+tells what each one catches as a short story. The run folder's `exported/export.log`
 keeps the full output of the last export.
 
 ### "Stopped by --strict: the code of the policy's network changed since training" (export, check 11)

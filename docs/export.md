@@ -286,6 +286,105 @@ and writes the file. Every check above, and the deploy metadata, are
 cyclotron's; rsl_rl's only safeguard is PyTorch's strict weight loading, which
 step 12 turns into a message naming the layers and sizes that don't fit.
 
+### Examples, check by check
+
+What each check catches, as a story: how the run was trained, what changed
+afterwards, and what the export does about it. The field and function names
+are made up.
+
+**6. The yaml changed since training.**
+
+- After training, you edit the run's `env.yaml` by hand to try a smaller
+  action scale.
+- You export. The file's sha256 no longer matches what training recorded in
+  `code_state.yaml`, so the export stops. The yaml is the only record of the
+  training settings, so an edited one can't be trusted.
+
+**7. The yaml is missing.**
+
+- You copy a run from another machine, but only `model_2000.pt` and
+  `params/agent.yaml`.
+- You export. With no `env.yaml` the training settings are unknown, so the
+  export asks whether to generate one from the current code; only you can
+  tell whether that's what the run used. `--strict` stops without asking, and
+  `--share` refuses the run before exporting.
+
+**9. A saved setting the code can't hold.**
+
+- The run's `env.yaml` has an observation term `feet_contact` that calls
+  `mdp.feet_contact_state`.
+- Later someone deletes that function, or the term.
+- You export. There is nowhere to put the setting, so the export stops before
+  building the environment. Had the function only moved, for example from
+  `isaac_asimov` to `cyclotron`, it would be found in its new module and the
+  export would go on.
+
+**10a. A saved setting the build changes.**
+
+- The run saved `decimation: 4`, a 50 Hz policy.
+- Later someone changes the config to work `decimation` out from the
+  simulation timestep while the environment is built.
+- You export. The rebuild sets `decimation: 4` from the yaml, then the new
+  code replaces it with 5. The export stops on `decimation`, saved 4 and
+  built 5. Without the stop, the policy would run at 40 Hz instead of the
+  50 Hz it was trained at.
+
+**10b. A setting the run didn't save.**
+
+- You train a run today, its `joint_pos` observation giving the raw joint
+  positions.
+- Next week someone adds an `offset` field to that observation term, with a
+  default of the robot's standing pose, so joint positions are now measured
+  from that pose.
+- You export the old run. Every key in its yaml matches, so 10a passes. The
+  observation is the same size, so 12 passes. `policy.onnx` agrees with the
+  checkpoint, so 14 passes.
+- But the policy now sees joint positions shifted by the standing pose, which
+  it never saw in training, and the yaml can't say otherwise because the
+  field didn't exist then. Only 10b flags it, naming `offset` and its value.
+- A new setting that changes a size as well, say a `history_length` of 3 that
+  stacks 3 frames of joint velocity, is also stopped by 12. 10b is what
+  catches the ones that only change values.
+
+**11. The code of the policy's network changed.**
+
+- The run was trained with rsl_rl's MLP using ELU activations.
+- Later someone edits the MLP class to use SiLU.
+- You export. The yaml matches and the weights load, since the layer sizes
+  are the same. `policy.onnx` agrees with the PyTorch policy, since both use
+  SiLU now.
+- But the network computes something other than what it was trained to.
+  Only 11's code hashes notice.
+
+**12. The checkpoint doesn't fit the network.**
+
+- The run's `joint_pos` observation covered 27 joints.
+- Later the robot model gains 2 wrist joints, so the same term returns 29
+  values.
+- You export. The network built from the yaml expects a wider input than the
+  checkpoint's first layer has, so the export stops, naming the layer and
+  both sizes.
+
+**13. The metadata can't describe the actions.**
+
+- You build a new task whose actions are joint velocities.
+- You export. The deploy metadata only describes actions that are joint
+  position targets, so the export warns and writes `policy.onnx` without
+  metadata rather than a wrong contract.
+
+**14. `policy.onnx` doesn't give the checkpoint's actions.**
+
+- A change to the exporter leaves the observation normalizer out of the ONNX
+  graph.
+- You export. On the same 64 observations, `policy.onnx` and the checkpoint
+  give different actions, so the export stops and discards the new files.
+  This one is always an exporter bug, not a problem with the run.
+
+In short: 6 to 9 catch problems with the run's files, 10 to 12 code that
+changed since training, and 13 and 14 problems with the exported file. 10b
+and 11 are the only ones that catch a change nothing later would notice,
+which is why `--strict` stops on them.
+
 ## Options
 
 | Flag | Meaning |
