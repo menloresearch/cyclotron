@@ -82,7 +82,7 @@ flowchart TD
 
     Start(["./cyclotron.sh --export"]) --> C1
 
-    subgraph pre ["Before Isaac Sim starts"]
+    subgraph pre ["Is the command valid?"]
         C1{"1. Extra arguments?"} -->|yes| E1["Stop"]
         C1 -->|no| C2{"2. Checkpoint is an<br/>existing file path,<br/>not a URL?"}
         C2 -->|no| E2["Stop"]
@@ -93,7 +93,7 @@ flowchart TD
     C3 -->|yes| Launch["Isaac Sim starts, headless"]
     Launch --> C4
 
-    subgraph build ["Before building the environment"]
+    subgraph build ["Are the run's saved settings intact and usable?"]
         C4{"4. Run and checkpoint<br/>found?"} -->|no| E4["Stop"]
         C4 -->|yes| C5["5. Note if the output folder<br/>already holds an export"]
         C5 --> C6{"6. env.yaml and agent.yaml<br/>match the sha256 in<br/>code_state.yaml?"}
@@ -114,7 +114,7 @@ flowchart TD
     C9 -->|yes| Env["Restore the policy settings from<br/>env.yaml and agent.yaml,<br/>build a one-robot environment"]
     Env --> C10
 
-    subgraph after ["After building the environment"]
+    subgraph after ["Does the rebuilt policy match the training run?"]
         C10{"10. Rebuilt settings match<br/>env.yaml and agent.yaml?"} -->|differ| E10["Stop"]
         C10 -->|match| C10b{"Current code has settings<br/>the run didn't save?"}
         C10b -->|"yes, --strict"| E10b["Stop"]
@@ -132,7 +132,7 @@ flowchart TD
     C12 -->|yes| Write["Write policy.onnx and policy.pt,<br/>copy the run's yaml files,<br/>all in a staging folder"]
     Write --> C13
 
-    subgraph files ["After writing the files"]
+    subgraph files ["Is policy.onnx faithful to the checkpoint and deployable?"]
         C13{"13. All action terms are<br/>joint position actions?"} -->|yes| Meta["Attach the deploy metadata"]
         C13 -->|no| W13["Warn: no deploy metadata"]
         Meta --> C14
