@@ -359,6 +359,8 @@ def main():
         log("[ERROR] The rebuilt policy settings don't match the run's env.yaml and agent.yaml:")
         for line in mismatches:
             log(f"    {line}")
+        log("  The current code changes these settings while building the environment, so the exported policy wouldn't")
+        log(f"  see what it was trained with. {check_out_hint(run_dir)}")
         env.close()
         sys.exit(1)
     log("[INFO] Checked the rebuilt policy settings against the run's env.yaml and agent.yaml: they match.")

@@ -114,8 +114,8 @@ flowchart TD
     C9 -->|yes| Env["Restore the policy settings from<br/>env.yaml and agent.yaml,<br/>build a one-robot environment"]
     Env --> C10
 
-    subgraph after ["Does the rebuilt policy match the training run?"]
-        C10{"10. Rebuilt settings match<br/>env.yaml and agent.yaml?"} -->|differ| E10["Stop"]
+    subgraph after ["Will the run's weights drive the policy it was trained with?"]
+        C10{"10. Built environment uses<br/>the run's saved settings?"} -->|differ| E10["Stop: names each setting<br/>and the commit to check out"]
         C10 -->|match| C10b{"Current code has settings<br/>the run didn't save?"}
         C10b -->|"yes, --strict"| E10b["Stop"]
         C10b -->|"yes"| W10["Warn: they keep the<br/>code's value"]
@@ -212,10 +212,15 @@ These take a second, so a typo doesn't cost an Isaac Sim launch.
 
 ### After building the environment
 
-10. **The rebuilt settings match the run.** Compares the policy settings of
-    the built environment with `env.yaml` and `agent.yaml`. Stops on any
-    difference, which means the rebuild went wrong: `The rebuilt policy
-    settings don't match the run's env.yaml and agent.yaml:`. Notes `Checked
+10. **The built environment uses the run's settings.** Compares the policy
+    settings of the built environment with `env.yaml` and `agent.yaml`. Stops
+    on any difference: `The rebuilt policy settings don't match the run's
+    env.yaml and agent.yaml:`, one line per setting. A difference means the
+    current code changes a saved setting while it builds the environment (a
+    config that computes a value from others, for example), so the policy
+    would see something other than what it was trained with. To fix it, check
+    out the commit the message names, the one the run was trained with, and
+    export from there, or train a new run with the current code. Notes `Checked
     the rebuilt policy settings against the run's env.yaml and agent.yaml:
     they match.` otherwise. Warns about settings the current code has but the
     run didn't save (added since training), which keep the code's value: `The
