@@ -187,6 +187,14 @@ def _full_float32():
         torch.backends.cudnn.allow_tf32, torch.backends.cuda.matmul.allow_tf32 = saved
 
 
+def _largest_gap(expected: np.ndarray, actual: np.ndarray) -> float:
+    """The largest absolute difference, or inf when either side is not finite: ``max`` drops a NaN, so a NaN
+    difference would otherwise pass any tolerance."""
+    if not (np.isfinite(expected).all() and np.isfinite(actual).all()):
+        return float("inf")
+    return float(np.abs(expected - actual).max())
+
+
 def max_onnx_difference(
     policy: torch.nn.Module, obs: TensorDict, onnx_path: str, num_samples: int = 64, seed: int = 0
 ) -> float:
@@ -235,10 +243,10 @@ def max_onnx_difference(
         outputs = [
             session.run(None, {obs_input.name: sample[None].numpy(), **memories[i]}) for i, sample in enumerate(samples)
         ]
-        difference = max(difference, np.abs(expected[0] - np.stack([out[0][0] for out in outputs])).max())
+        difference = max(difference, _largest_gap(expected[0], np.stack([out[0][0] for out in outputs])))
         for index, state in enumerate(expected[1:], start=1):
             actual = np.stack([out[index][:, 0] for out in outputs], axis=1)
-            difference = max(difference, np.abs(state - actual).max())
+            difference = max(difference, _largest_gap(state, actual))
         memories = [{i.name: out[1 + n] for n, i in enumerate(memory_inputs)} for out in outputs]
     if recurrent:
         policy.reset()

@@ -412,10 +412,10 @@ def main():
         for name in missing:
             log(f"[WARNING] {run_dir}/params/{name} not found; the viewer and --share need it next to policy.onnx.")
 
-        metadata = gather_deploy_metadata(env, policy, run_dir, agent_cfg.clip_actions, log)
-        if metadata is not None:
-            attach_deploy_metadata(onnx_path, metadata)
-            log(f"[INFO] Attached deploy metadata to policy.onnx: {', '.join(metadata)}, obs_dim, action_dim.")
+        deploy = gather_deploy_metadata(env, policy, run_dir, agent_cfg.clip_actions, log)
+        if deploy is not None:
+            attach_deploy_metadata(onnx_path, deploy)
+            log(f"[INFO] Attached deploy metadata to policy.onnx: {', '.join(deploy)}, obs_dim, action_dim.")
 
         difference = max_onnx_difference(policy, env.get_observations(), onnx_path)
         checked = f"actions and memory over {RECURRENT_STEPS} steps" if policy.is_recurrent else "actions"
@@ -437,8 +437,9 @@ def main():
     for name in ("policy.onnx", "policy.pt", *BUNDLE_YAMLS, *OPTIONAL_BUNDLE_YAMLS):
         if name not in missing and os.path.isfile(os.path.join(output_dir, name)):
             log(f"  {name}")
-    if not_saved or generated:
-        log(f"[WARNING] {' and '.join(not_saved or generated)} came from the current code, not from training.")
+    from_code = [name for name in RUN_CONFIGS if name in not_saved or name in generated]
+    if from_code:
+        log(f"[WARNING] {' and '.join(from_code)} came from the current code, not from training.")
     if new:
         log("[WARNING] The current code has policy settings the run didn't save; see the warning before the export.")
     if code:

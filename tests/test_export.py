@@ -104,6 +104,16 @@ def test_onnx_without_the_normalizer_is_caught(tmp_path, trained):
     assert max_onnx_difference(policy, obs, export(unnormalized, tmp_path)) > 1e-2
 
 
+def test_onnx_giving_nan_actions_is_caught(tmp_path, trained):
+    # A NaN difference passes every tolerance, so actions that are not finite count as an infinite difference.
+    policy, obs = trained
+    broken = make_policy(obs, obs_normalization=True)
+    broken.load_state_dict(policy.state_dict())
+    with torch.no_grad():
+        next(broken.mlp.parameters()).fill_(float("nan"))
+    assert max_onnx_difference(policy, obs, export(broken, tmp_path)) == float("inf")
+
+
 def make_recurrent_policy(obs: TensorDict, rnn_type: str) -> RNNModel:
     obs_groups = {"actor": ["policy", "extra"], "critic": ["policy"]}
     distribution = {"class_name": "GaussianDistribution", "init_std": 1.0}
@@ -196,11 +206,13 @@ def test_deploy_metadata_names_the_robot_model_the_run_was_trained_with():
     assert read["robot_model_commit"] == "732cc60"
     assert read["robot_model_dirty"] == "false"
     assert sample_metadata(robot_model={**robot, "dirty": True})["robot_model_dirty"] == "true"
-    # Not tracked by git: the file name and hash stay, there is no repository, commit or dirty flag to name.
-    untracked = {"repo": None, "urdf_filepath": "asimov_1.urdf", "sha256": "abc", "commit": None, "dirty": None}
+    # Not tracked by git: the name, file name and hash stay, there is no repository, commit or dirty flag to name.
+    untracked = {"name": "asimov_1", "repo": None, "urdf_filepath": "asimov_1.urdf", "sha256": "abc"}
+    untracked.update(commit=None, dirty=None)
     read = sample_metadata(robot_model=untracked)
-    assert read["robot_model_urdf_filepath"] == "asimov_1.urdf" and read["robot_model_sha256"] == "abc"
-    assert not {"robot_model_name", "robot_model_repo", "robot_model_commit", "robot_model_dirty"} & set(read)
+    assert read["robot_model_name"] == "asimov_1" and read["robot_model_sha256"] == "abc"
+    assert read["robot_model_urdf_filepath"] == "asimov_1.urdf"
+    assert not {"robot_model_repo", "robot_model_commit", "robot_model_dirty"} & set(read)
     # A run trained before urdf_filepath was recorded names its urdf as file.
     old = sample_metadata(robot_model={"file": "asimov_1.urdf", "sha256": "abc", "commit": "732cc60"})
     assert old["robot_model_urdf_filepath"] == "asimov_1.urdf"

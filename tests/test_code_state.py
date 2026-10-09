@@ -247,7 +247,7 @@ def test_compare_code_state_lists_files_dependencies_and_versions(tmp_path):
     current["packages"]["rsl-rl-lib"] = "9.9.9"
     current["robot_model"] = {"urdf_filepath": "asimov_1.urdf", "sha256": "abc", "commit": "1234567890"}
     assert compare_code_state(saved, current) == [
-        "trained on a detached HEAD @ unknown, now a detached HEAD @ unknown",
+        "trained on code git doesn't track, now code git doesn't track",
         "cyclotron files changed: tasks/env_cfg.py",
         "cyclotron files added: new.py",
         "cyclotron files removed: old.py",

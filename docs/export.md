@@ -83,8 +83,9 @@ These take a second, so a typo doesn't cost an Isaac Sim launch.
    (`--checkpoint '…' is not a path. …`), or a URL, since the export needs the
    run folder around the checkpoint (`--export needs the run folder around
    the checkpoint …`).
-3. **The task is known.** Taken from `--task`, else from the experiment name
-   in the run's `agent.yaml`, else from `--experiment_name`. Stops when none
+3. **The task is known.** Taken from `--task`; else, with a full `--checkpoint`
+   path, from the experiment name in the run's `agent.yaml`; else from
+   `--experiment_name`. Stops when none
    names a known task: `Cannot infer the task: …/agent.yaml not found. Pass it
    with --task.`, `Cannot infer the task for experiment '…'. Pass it with
    --task.` or `Pass --task, or a full --checkpoint path …`
@@ -200,8 +201,9 @@ step 12 turns into a message naming the layers and sizes that don't fit.
 | `--strict` | Stop instead of asking or warning in [checks](#checks-step-by-step) 7, 10 and 11: a missing `env.yaml`/`agent.yaml`, policy settings the run didn't save, and changes to the code behind the settings. |
 | `--device` | Device to run the export on (an AppLauncher flag; the export always runs headless). |
 
-Nothing else is accepted: setting overrides such as `env.actions.joint_pos.scale=0.3` are refused, since the run's
-`env.yaml` and `agent.yaml` are the only source of its settings.
+Other than Isaac Lab's AppLauncher flags, nothing else is accepted: setting overrides such as
+`env.actions.joint_pos.scale=0.3` are refused, since the run's `env.yaml` and `agent.yaml` are the only source of its
+settings.
 
 ## Deploy metadata
 

@@ -1,10 +1,11 @@
 """Record the code a run was trained with, and report what changed before ``--export`` and ``--play`` use the run.
 
 Training writes ``params/code_state.yaml``: the git commit, a hash of every training-code file in the cyclotron
-package, the Isaac Lab commit, a hash of the robot model, the installed package versions, and the sha256 of the
-``env.yaml`` and ``agent.yaml`` it wrote next to it, so editing those by hand later shows. Export and play compare the
-run's saved ``env.yaml``, ``agent.yaml`` and ``code_state.yaml`` with the current code, so a changed observation,
-action or network is reported instead of crashing or silently changing what the policy sees.
+package, the Isaac Lab commit, the robot model (its name, repository, urdf path, sha256, commit and dirty flag), the
+installed package versions, and the sha256 of the ``env.yaml`` and ``agent.yaml`` it wrote next to it, so editing
+those by hand later shows. Export and play compare the run's saved ``env.yaml``, ``agent.yaml`` and
+``code_state.yaml`` with the current code, so a changed observation, action or network is reported instead of
+crashing or silently changing what the policy sees.
 
 Plain Python with no Isaac Lab imports, so it can run without Isaac Sim and in tests.
 """
@@ -77,13 +78,15 @@ def _git_state(path: str) -> dict:
     if _git(folder, "ls-files", "--error-unmatch", os.path.basename(path) if folder != path else ".") is None:
         return {"commit": None, "branch": None, "remote": None, "dirty": None}
     branch = _git(folder, "rev-parse", "--abbrev-ref", "HEAD")
+    status = _git(folder, "status", "--porcelain", "--", ".")
     return {
         "commit": _git(folder, "rev-parse", "HEAD"),
         "branch": None if branch == "HEAD" else branch,
         "remote": _without_credentials(_git(folder, "remote", "get-url", "origin")),
         # File hashes are exact; this only says whether the commit alone describes the code in ``folder``: changed
-        # files and new ones never added to git count, ignored ones and the rest of the repository don't.
-        "dirty": bool(_git(folder, "status", "--porcelain", "--", ".")),
+        # files and new ones never added to git count, ignored ones and the rest of the repository don't. None when
+        # git status failed: unknown, not clean.
+        "dirty": None if status is None else bool(status),
     }
 
 
@@ -123,14 +126,16 @@ def _robot_model_record(robot: str) -> dict:
     folder, name = os.path.split(robot)
     git = _git_state(robot)
     tracked = git["commit"] is not None
+    # The whole repository, not just the urdf folder: the meshes the urdf loads sit next to it. None when git
+    # status failed: unknown, not clean.
+    status = _git(folder, "status", "--porcelain", "--", ":/") if tracked else None
     return {
         "name": _urdf_robot_name(robot),
         "repo": _repository_name(git["remote"]),
         "urdf_filepath": _git(folder, "ls-files", "--full-name", "--", name) if tracked else name,
         "sha256": _sha256(robot),
         "commit": git["commit"],
-        # The whole repository, not just the urdf folder: the meshes the urdf loads sit next to it.
-        "dirty": bool(_git(folder, "status", "--porcelain", "--", ":/")) if tracked else None,
+        "dirty": None if status is None else bool(status),
     }
 
 
@@ -370,6 +375,9 @@ def _short(commit: str | None) -> str:
 
 
 def _where(code: dict) -> str:
+    if not code.get("commit"):
+        # Not in git, or git failed: there is no branch to name, detached or not.
+        return "code git doesn't track"
     place = f"{code.get('branch') or 'a detached HEAD'} @ {_short(code.get('commit'))}"
     return place + (" with uncommitted changes" if code.get("dirty") else "")
 
@@ -548,8 +556,8 @@ def training_commit(run_dir: str) -> str | None:
 
 
 def training_robot_model(run_dir: str) -> dict | None:
-    """The robot model a run was trained with, as ``code_state.yaml`` recorded it (repo, urdf_filepath, sha256, commit,
-    dirty); None when the run doesn't record one."""
+    """The robot model a run was trained with, as ``code_state.yaml`` recorded it (name, repo, urdf_filepath, sha256,
+    commit, dirty); None when the run doesn't record one."""
     path = os.path.join(run_dir, "params", CODE_STATE_FILE)
     if not os.path.isfile(path):
         return None

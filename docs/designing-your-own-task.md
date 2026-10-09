@@ -184,7 +184,7 @@ The rest of the pipeline now works unchanged, because the pieces from steps
 # Watch the checkpoint in Isaac Sim (uses Asimov1-SlowWalk-Play-v0).
 ./cyclotron.sh --play --task Asimov1-SlowWalk-Play-v0 --num_envs 16
 
-# Export the latest checkpoint; the task is inferred from agent.yaml.
+# Export a checkpoint; the task is inferred from agent.yaml.
 ./cyclotron.sh --export \
     --checkpoint logs/rsl_rl/asimov1_slow_walk/<run>/model_100.pt
 
@@ -260,8 +260,9 @@ for everything downstream of training. Break them knowingly or not at all.
    or re-centering actions silently scrambles a deployed robot.
 4. **Changing the policy's observations or actions changes what existing
    checkpoints are compatible with.** A checkpoint stores the config it was
-   trained with; after you edit the task, `--play` and `--export` diff the
-   run's saved config against your checkout and name exactly what changed —
+   trained with; after you edit the task, `--play` and `--export` rebuild the
+   policy from the run's saved `env.yaml` and `agent.yaml` and name what your
+   checkout changed since —
    see [Code changes since training](../README.md#code-changes-since-training).
    That is the reason to make a new task instead of editing
    `Asimov1VelocityEnvCfg` in place: old runs keep their config, your variant
