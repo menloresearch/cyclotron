@@ -595,7 +595,9 @@ def actor_code_differences(run_dir: str, agent: dict) -> tuple[str, list[str]]:
         return ACTOR_CODE_UNRECORDED, []
     current = actor_code(agent)
     if current is None:
-        return ACTOR_CODE_CHANGED, [f"the network class {actor_class_name(agent)} can't be imported by the current code"]
+        return ACTOR_CODE_CHANGED, [
+            f"the network class {actor_class_name(agent)} can't be imported by the current code"
+        ]
     lines = [f"{name}: changed" for name in recorded if name in current and recorded[name] != current[name]]
     lines += [f"{name}: added" for name in current if name not in recorded]
     lines += [f"{name}: removed" for name in recorded if name not in current]

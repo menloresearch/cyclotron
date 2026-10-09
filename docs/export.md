@@ -178,8 +178,11 @@ These take a second, so a typo doesn't cost an Isaac Sim launch.
    stops with its own error if there is none, or no checkpoint in it.
 5. **What gets overwritten.** Notes it when the output folder already holds
    an export: `Overwriting the run's existing export.`, or `Overwriting an
-   export made before model_….pt was written, …` when that export wasn't of
-   the run's latest checkpoint.
+   export made before model_….pt was written, …` when the run wrote a
+   checkpoint after that export (an export made while it was still training).
+   The note goes by file times, so exporting an older checkpoint after
+   training ended gets the first note; `export.log` records which checkpoint
+   each export was of.
 6. **`env.yaml` and `agent.yaml` are as training wrote them.** Training
    records their sha256 in `code_state.yaml`. Stops if either no longer
    matches, because it was edited by hand or deleted: `…/params/env.yaml
