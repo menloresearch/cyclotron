@@ -44,6 +44,20 @@ case "${1:-}" in
         if [ ! -f "${VIEWER_DIR}/package.json" ]; then
             echo "Fetching humanoid-policy-viewer (first run only)..."
             git -C "${CYCLOTRON_ROOT}" submodule update --init --checkout --depth 1 third_party/humanoid-policy-viewer
+        elif git -C "${CYCLOTRON_ROOT}" submodule status third_party/humanoid-policy-viewer | grep -q '^+'; then
+            # The submodule is never updated by a plain `git submodule update`, so after a pull that moves it the old
+            # viewer would keep running against the new export format.
+            if [ -n "$(git -C "${VIEWER_DIR}" status --porcelain)" ]; then
+                echo "[WARNING] third_party/humanoid-policy-viewer is not at the commit this checkout pins, and has" \
+                    "uncommitted changes, so it is left as is." >&2
+            else
+                echo "Updating humanoid-policy-viewer to the commit this checkout pins..."
+                git -C "${CYCLOTRON_ROOT}" submodule update --checkout --depth 1 third_party/humanoid-policy-viewer
+                # The viewer installs its dependencies only when it has none, so a new commit's are installed here.
+                if [ -d "${VIEWER_DIR}/node_modules" ]; then
+                    (cd "${VIEWER_DIR}" && npm ci)
+                fi
+            fi
         fi
         # Over SSH, or on Linux without a display, there is no browser to open; the viewer prints its URL instead.
         # macOS sets neither DISPLAY nor WAYLAND_DISPLAY but can always open one.

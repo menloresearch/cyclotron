@@ -96,7 +96,9 @@ from isaaclab_rl.utils.pretrained_checkpoint import get_published_pretrained_che
 from isaaclab_tasks.utils.hydra import hydra_task_config
 
 import cyclotron.tasks  # noqa: F401
-from cyclotron.code_state import describe_changes, load_policy
+from cyclotron.code_state import check_out_hint, describe_changes
+from cyclotron.policy_io import resolve_policy_io
+from cyclotron.policy_loading import load_policy
 
 CODE_CHANGE_CONSEQUENCE = (
     "--play runs the checkpoint in an environment built from the current code, so it may behave differently than in"
@@ -134,8 +136,13 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
 
     env = gym.make(args_cli.task, cfg=env_cfg, render_mode="rgb_array" if args_cli.video else None)
     # Compared where train.py saves params/: after the environment is created, which resolves parts of the config.
+    agent_dict = class_to_dict(agent_cfg)
     changes, level = describe_changes(
-        log_dir, class_to_dict(env_cfg), class_to_dict(agent_cfg), CODE_CHANGE_CONSEQUENCE
+        log_dir,
+        class_to_dict(env_cfg),
+        agent_dict,
+        CODE_CHANGE_CONSEQUENCE,
+        policy_io=resolve_policy_io(env.unwrapped, agent_dict),
     )
     print(changes)
     if level == "error":
@@ -172,7 +179,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         raise ValueError(f"Unsupported runner class: {agent_cfg.class_name}")
     resume_path = handle_deprecated_rsl_rl_checkpoint(resume_path, installed_version)
     try:
-        load_policy(runner, resume_path, agent_cfg.class_name, log_dir)
+        load_policy(runner, resume_path, agent_cfg.class_name, check_out_hint(log_dir))
     except ValueError as error:
         print(f"[ERROR] {error}")
         env.close()

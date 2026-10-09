@@ -88,6 +88,7 @@ from isaaclab_tasks.utils.hydra import hydra_task_config
 
 import cyclotron.tasks  # noqa: F401
 from cyclotron.code_state import hash_run_configs, record_code_state, write_code_state
+from cyclotron.policy_io import resolve_policy_io
 
 logger = logging.getLogger(__name__)
 
@@ -196,11 +197,23 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     if not args_cli.distributed or app_launcher.global_rank == 0:
         dump_yaml(os.path.join(log_dir, "params", "env.yaml"), env_cfg)
         dump_yaml(os.path.join(log_dir, "params", "agent.yaml"), agent_cfg)
-        # What --export and --play compare against to warn about code changes; <run>/<file>, not a local path.
-        loaded = os.path.join(*resume_path.split(os.sep)[-2:]) if loads_checkpoint else None
-        code_state = record_code_state(class_to_dict(env_cfg), loaded_checkpoint=loaded, agent=class_to_dict(agent_cfg))
         # The sha256 of the two files just written, so --export and --share notice if they are edited later.
-        code_state["run_configs"] = hash_run_configs(os.path.join(log_dir, "params"))
+        run_configs = hash_run_configs(os.path.join(log_dir, "params"))
+        try:
+            # What --export and --play compare against to warn about code changes; <run>/<file>, not a local path.
+            loaded = os.path.join(*resume_path.split(os.sep)[-2:]) if loads_checkpoint else None
+            agent_dict = class_to_dict(agent_cfg)
+            code_state = record_code_state(
+                class_to_dict(env_cfg),
+                loaded_checkpoint=loaded,
+                agent=agent_dict,
+                policy_io=resolve_policy_io(env.unwrapped, agent_dict),
+            )
+        except Exception as error:
+            # Bookkeeping never stops training; --export then reports what the run couldn't record.
+            logger.warning(f"Couldn't record the code this run is trained with: {error!r}")
+            code_state = {"error": repr(error)}
+        code_state["run_configs"] = run_configs
         write_code_state(os.path.join(log_dir, "params"), code_state)
 
     print_run_info(log_dir)

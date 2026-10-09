@@ -1,273 +1,98 @@
 from __future__ import annotations
 
-import copy
+import hashlib
 import os
-import re
 import shutil
 import subprocess
-from types import SimpleNamespace
 
 import pytest
-import torch
 import yaml
+from config_samples import dump, make_agent, make_env
 
 from cyclotron.code_state import (
     CODE_STATE_FILE,
     _git_state,
-    _short,
+    _model_where,
+    _where,
     _without_credentials,
     actor_code,
     actor_code_differences,
-    code_differences,
-    compare_code_state,
+    check_out_hint,
+    code_state_missing,
     describe_changes,
     edited_run_configs,
-    files_changed_since,
-    hash_files,
     hash_run_configs,
-    interface_differences,
-    load_config,
-    load_policy,
-    load_run_configs,
-    normalize_config,
-    policy_interface,
-    policy_shape_errors,
-    read_git_records,
-    rebuild_differences,
+    read_code_state,
     record_code_state,
+    robot_model_check,
     training_code,
     training_commit,
     training_robot_model,
     write_code_state,
 )
 
-SLOT_JOINTS = ["left_hip_pitch_joint", "right_hip_pitch_joint"]
+TRAINED_ON = {"commit": "32aef5c5ec11641f785bfd3c4aebb9c4de6bdc6b", "branch": "exp/drift", "dirty": False}
 
 
-def dump(config: dict) -> str:
-    """Write a config the way Isaac Lab's dump_yaml does: Python tags, keys in their original order."""
-    return yaml.dump(config, default_flow_style=False, sort_keys=False)
+def with_robot(env: dict, urdf) -> dict:
+    env["scene"]["robot"]["spawn"] = {"asset_path": str(urdf)}
+    return env
 
 
-def term(func: str, scale=None, **params) -> dict:
-    return {
-        "func": func,
-        "params": params,
-        "modifiers": None,
-        "noise": {"func": "isaaclab.utils.noise.noise_model:uniform_noise", "n_min": -0.01, "n_max": 0.01},
-        "clip": None,
-        "scale": scale,
-        "history_length": 0,
-        "flatten_history_dim": True,
-    }
-
-
-def make_env() -> dict:
-    """A trimmed env config shaped like Isaac Lab's class_to_dict output, with tuples and slices left in."""
-    asset_cfg = {"name": "robot", "joint_names": list(SLOT_JOINTS), "joint_ids": slice(None), "preserve_order": True}
-    return {
-        "sim": {"dt": 0.005, "gravity": (0.0, 0.0, -9.81)},
-        "decimation": 4,
-        "seed": 42,
-        "scene": {
-            "num_envs": 8192,
-            "robot": {
-                "init_state": {"pos": (0.0, 0.0, 0.639), "joint_pos": {".*_hip_pitch_joint": -0.15}},
-                "actuators": {
-                    "hip_pitch": {
-                        "class_type": "isaaclab.actuators.actuator_pd:DelayedPDActuator",
-                        "joint_names_expr": [".*_hip_pitch_joint"],
-                        "effort_limit": 45.0,
-                        "stiffness": 150.0,
-                        "damping": 5.0,
-                    }
-                },
-            },
-        },
-        "observations": {
-            "policy": {
-                "concatenate_terms": True,
-                "enable_corruption": True,
-                "history_length": None,
-                "base_ang_vel": term(
-                    "cyclotron.tasks.locomotion.mdp.observations:delayed_obs", 0.25, quantity="base_ang_vel"
-                ),
-                "joint_pos_slot01": term(
-                    "isaaclab.envs.mdp.observations:joint_pos_rel", 1.0, asset_cfg=copy.deepcopy(asset_cfg)
-                ),
-                "actions": term("isaaclab.envs.mdp.observations:last_action"),
-            },
-            "critic": {"base_lin_vel": term("isaaclab.envs.mdp.observations:base_lin_vel")},
-        },
-        "actions": {
-            "joint_pos": {
-                "class_type": "isaaclab.envs.mdp.actions.joint_actions:JointPositionAction",
-                "debug_vis": False,
-                "joint_names": list(SLOT_JOINTS),
-                "scale": 0.25,
-                "offset": 0.0,
-                "preserve_order": True,
-                "use_default_offset": True,
-            }
-        },
-        "commands": {"twist": {"ranges": {"lin_vel_x": (-0.6, 0.8)}}},
-        "events": {"push_robot": {"func": "isaaclab.envs.mdp.events:push_by_setting_velocity"}},
-    }
-
-
-def make_agent() -> dict:
-    distribution = {"class_name": "GaussianDistribution", "init_std": 1.0}
-    return {
-        "seed": 1,
-        "obs_groups": {"actor": ["policy"], "critic": ["critic"]},
-        "clip_actions": None,
-        "class_name": "OnPolicyRunner",
-        "actor": {
-            "class_name": "MLPModel",
-            "hidden_dims": [512, 256, 128],
-            "activation": "elu",
-            "distribution_cfg": distribution,
-        },
-        "critic": {"class_name": "MLPModel", "hidden_dims": [512, 256, 128], "activation": "elu"},
-    }
-
-
-def differences(env: dict, agent: dict | None = None) -> tuple[list[str], list[str]]:
-    """Compare a changed config with the one a run saved, as export and play do."""
-    saved = load_config(dump(make_env())), load_config(dump(make_agent()))
-    current = normalize_config(env), normalize_config(agent or make_agent())
-    return interface_differences(policy_interface(*saved), policy_interface(*current))
-
-
-def test_saved_yaml_with_python_tags_reads_like_the_current_config():
-    text = dump(make_env())
-    assert "!!python/tuple" in text and "builtins.slice" in text
-    assert differences(make_env()) == ([], [])
-    saved = load_config(text)
-    assert saved["sim"]["gravity"] == (0.0, 0.0, -9.81)
-    assert saved["observations"]["policy"]["joint_pos_slot01"]["params"]["asset_cfg"]["joint_ids"] == slice(None)
-
-
-def test_changes_to_what_the_policy_sees_and_does_are_named_as_overrides():
-    env, agent = make_env(), make_agent()
-    env["observations"]["policy"]["base_ang_vel"]["scale"] = 0.5
-    env["observations"]["policy"]["base_ang_vel"]["params"]["max_lag"] = 2
-    env["actions"]["joint_pos"]["joint_names"].reverse()
-    env["scene"]["robot"]["actuators"]["hip_pitch"]["stiffness"] = 200.0
-    env["decimation"] = 2
-    agent["actor"]["hidden_dims"] = [256, 128]
-    agent["clip_actions"] = 1.0
-    # Settings only the current config has come last.
-    assert differences(env, agent) == (
-        [],
-        [
-            "env.observations.policy.base_ang_vel.scale: 0.25 -> 0.5",
-            "env.actions.joint_pos.joint_names: same entries in a different order",
-            "env.scene.robot.actuators.hip_pitch.stiffness: 150.0 -> 200.0",
-            "env.decimation: 4 -> 2",
-            "agent.actor.hidden_dims: [512, 256, 128] -> [256, 128]",
-            "agent.clip_actions: none -> 1.0",
-            "env.observations.policy.base_ang_vel.params.max_lag: none -> 2",
-        ],
+def test_code_state_records_git_versions_and_the_robot_model_but_no_files(tmp_path):
+    urdf = tmp_path / "asimov_1.urdf"
+    urdf.write_text("<robot/>")
+    io = {"actions": {"joint_names": ["hip"], "scale": [0.25]}, "observations": {}}
+    state = record_code_state(
+        with_robot(make_env(), urdf), "2026-09-26_base/model_500.pt", agent=make_agent(), policy_io=io
     )
-
-
-def test_a_network_change_that_keeps_the_weight_shapes_is_an_error():
-    agent = make_agent()
-    agent["actor"]["activation"] = "relu"
-    assert differences(make_env(), agent) == (["agent.actor.activation: elu -> relu"], [])
-
-
-def test_added_removed_and_reordered_terms_are_reported_once():
-    env = make_env()
-    policy = env["observations"]["policy"]
-    policy["foot_height"] = term("cyclotron.tasks.locomotion.mdp.observations:foot_height")
-    del policy["actions"]
-    assert differences(env) == (
-        [],
-        [
-            "env.observations.policy: term actions removed",
-            "env.observations.policy: term foot_height added",
-        ],
-    )
-    reordered = make_env()
-    reordered["observations"]["policy"] = dict(reversed(list(reordered["observations"]["policy"].items())))
-    assert differences(reordered) == (
-        [],
-        [
-            "env.observations.policy: terms reordered, base_ang_vel, joint_pos_slot01, actions"
-            " -> actions, joint_pos_slot01, base_ang_vel"
-        ],
-    )
-
-
-def test_training_only_and_play_changes_are_ignored():
-    env, agent = make_env(), make_agent()
-    # The experiment branches' privileged critic input, and what the play tasks change.
-    env["observations"]["critic"]["path_error"] = term("cyclotron.tasks.locomotion.mdp.drift:path_error")
-    env["observations"]["policy"]["enable_corruption"] = False
-    for name in ("base_ang_vel", "joint_pos_slot01", "actions"):
-        env["observations"]["policy"][name]["noise"] = None
-    env["commands"]["twist"]["ranges"]["lin_vel_x"] = (0.6, 0.8)
-    env["events"]["push_robot"] = None
-    env["actions"]["joint_pos"]["debug_vis"] = True
-    env["scene"]["num_envs"] = 1
-    env["seed"] = 7
-    agent["critic"]["hidden_dims"] = [1024]
-    agent["actor"]["distribution_cfg"]["init_std"] = 0.5
-    assert differences(env, agent) == ([], [])
-
-
-def test_renamed_modules_and_new_unset_fields_are_not_changes():
-    env = make_env()
-    env["observations"]["policy"]["base_ang_vel"]["func"] = "isaac_asimov.tasks.locomotion.mdp.observations:delayed_obs"
-    env["actions"]["joint_pos"]["clip"] = None  # a field a newer Isaac Lab adds, unset
-    assert differences(env) == ([], [])
-
-
-def test_hashes_cover_training_code_only(tmp_path):
-    (tmp_path / "tasks" / "__pycache__").mkdir(parents=True)
-    (tmp_path / "tasks" / "env_cfg.py").write_text("scale = 0.25\n")
-    (tmp_path / "tasks" / "__pycache__" / "env_cfg.cpython-311.pyc").write_bytes(b"")
-    (tmp_path / "hub.py").write_text("")
-    assert list(hash_files(str(tmp_path))) == ["tasks/env_cfg.py"]
-
-
-def test_compare_code_state_lists_files_dependencies_and_versions(tmp_path):
-    package = tmp_path / "pkg"
-    (package / "tasks").mkdir(parents=True)
-    (package / "tasks" / "env_cfg.py").write_text("scale = 0.25\n")
-    (package / "old.py").write_text("")
-    saved = record_code_state(package=str(package))
-    assert compare_code_state(saved, record_code_state(package=str(package))) == []
-
-    (package / "tasks" / "env_cfg.py").write_text("scale = 0.5\n")
-    (package / "old.py").unlink()
-    (package / "new.py").write_text("")
-    current = record_code_state(package=str(package))
-    current["packages"]["rsl-rl-lib"] = "9.9.9"
-    current["robot_model"] = {"urdf_filepath": "asimov_1.urdf", "sha256": "abc", "commit": "1234567890"}
-    assert compare_code_state(saved, current) == [
-        "trained on code git doesn't track, now code git doesn't track",
-        "cyclotron files changed: tasks/env_cfg.py",
-        "cyclotron files added: new.py",
-        "cyclotron files removed: old.py",
-        "robot model changed: unknown @ unknown -> asimov_1.urdf @ 1234567",
-        f"rsl-rl-lib: {saved['packages']['rsl-rl-lib']} -> 9.9.9",
+    assert list(state) == [
+        "cyclotron",
+        "isaaclab_commit",
+        "packages",
+        "robot_model",
+        "actor_code",
+        "policy_io",
+        "loaded_checkpoint",
     ]
+    # Git's view of the package, not a hash of each of its files.
+    assert set(state["cyclotron"]) == {"commit", "branch", "remote", "dirty"}
+    assert state["policy_io"] == io
+    write_code_state(str(tmp_path / "params"), state)
+    text = (tmp_path / "params" / CODE_STATE_FILE).read_text()
+    assert state["robot_model"]["urdf_filepath"] == "asimov_1.urdf" and str(tmp_path) not in text
+    assert yaml.safe_load(text)["loaded_checkpoint"] == "2026-09-26_base/model_500.pt"
+    # Without an agent or a resolved environment there is nothing to record for them.
+    assert not {"actor_code", "policy_io", "loaded_checkpoint"} & set(record_code_state(make_env()))
+
+
+def test_read_code_state_is_none_without_the_file(tmp_path):
+    assert read_code_state(str(tmp_path)) is None
+    assert code_state_missing(str(tmp_path))
+    (tmp_path / "params").mkdir()
+    (tmp_path / "params" / CODE_STATE_FILE).write_text("")
+    assert read_code_state(str(tmp_path)) == {}
+    assert not code_state_missing(str(tmp_path))
 
 
 def test_actor_code_hashes_the_network_modules_and_not_the_rest_of_the_library():
     modules = actor_code(make_agent())
     assert {"rsl_rl.models.mlp_model", "rsl_rl.modules.mlp", "rsl_rl.modules.normalization"} <= set(modules)
-    assert not {name for name in modules if name.startswith(("rsl_rl.algorithms", "rsl_rl.runners"))}
-    # A recurrent actor adds its memory module; the distilled student is found under its own key.
-    agent = make_agent()
-    agent["actor"]["class_name"] = "RNNModel"
-    assert "rsl_rl.modules.rnn" in actor_code(agent)
+    assert all(name.startswith(("rsl_rl.models", "rsl_rl.modules")) for name in modules)
+    # Every network module, whichever the run uses; the distilled student is found under its own key.
+    assert "rsl_rl.modules.rnn" in modules
     student = {"class_name": "DistillationRunner", "student": {"class_name": "MLPModel"}}
-    assert "rsl_rl.models.mlp_model" in actor_code(student)
+    assert actor_code(student) == modules
     assert actor_code({"actor": {}}) is None and actor_code({"actor": {"class_name": "NoSuchModel"}}) is None
+
+
+def test_actor_code_adds_the_module_of_a_custom_network(tmp_path, monkeypatch):
+    source = "from rsl_rl.models import MLPModel\n\n\nclass WideModel(MLPModel):\n    pass\n"
+    (tmp_path / "wide_model.py").write_text(source)
+    monkeypatch.syspath_prepend(str(tmp_path))
+    modules = actor_code({"actor": {"class_name": "wide_model:WideModel"}})
+    assert modules["wide_model"] == hashlib.sha256(source.encode()).hexdigest()
+    assert set(modules) - {"wide_model"} == set(actor_code(make_agent()))
 
 
 def test_actor_code_differences_compare_with_what_the_run_recorded(tmp_path, monkeypatch):
@@ -290,35 +115,6 @@ def test_actor_code_differences_compare_with_what_the_run_recorded(tmp_path, mon
     assert lines == ["rsl_rl.modules.mlp: changed", "rsl_rl.modules.extra: added"]
     monkeypatch.setattr("cyclotron.code_state.actor_code", lambda _: None)
     assert actor_code_differences(str(tmp_path), agent)[0] == "changed"
-
-
-def test_compare_code_state_can_be_limited_to_the_files_behind_the_policy_settings(tmp_path):
-    package = tmp_path / "pkg"
-    (package / "tasks").mkdir(parents=True)
-    (package / "tasks" / "observations.py").write_text("scale = 0.25\n")
-    (package / "tasks" / "rewards.py").write_text("weight = 1.0\n")
-    saved = record_code_state(package=str(package))
-    (package / "tasks" / "rewards.py").write_text("weight = 2.0\n")
-    current = record_code_state(package=str(package))
-    current["isaaclab_commit"] = "f" * 40
-    behind = {"tasks/observations.py"}
-    # A reward change can't change an exported policy; Isaac Lab and the robot model are always compared.
-    assert compare_code_state(saved, current, behind) == [f"Isaac Lab: {_short(saved['isaaclab_commit'])} -> fffffff"]
-    (package / "tasks" / "observations.py").write_text("scale = 0.5\n")
-    assert "cyclotron files changed: tasks/observations.py" in compare_code_state(
-        saved, record_code_state(package=str(package)), behind
-    )
-
-
-def test_code_state_records_the_robot_model_and_no_local_paths(tmp_path):
-    urdf = tmp_path / "asimov_1.urdf"
-    urdf.write_text("<robot/>")
-    env = {"scene": {"robot": {"spawn": {"asset_path": str(urdf)}}}}
-    state = record_code_state(env, loaded_checkpoint="2026-09-26_base/model_500.pt")
-    write_code_state(str(tmp_path / "params"), state)
-    text = (tmp_path / "params" / CODE_STATE_FILE).read_text()
-    assert state["robot_model"]["urdf_filepath"] == "asimov_1.urdf" and str(tmp_path) not in text
-    assert yaml.safe_load(text)["loaded_checkpoint"] == "2026-09-26_base/model_500.pt"
 
 
 @pytest.mark.skipif(shutil.which("git") is None, reason="needs git")
@@ -377,60 +173,41 @@ def test_training_robot_model_reads_the_run_record(tmp_path):
     assert training_robot_model(str(tmp_path)) is None
 
 
+def test_robot_model_check_compares_the_urdf_the_current_config_loads(tmp_path):
+    urdf = tmp_path / "asimov_1.urdf"
+    urdf.write_text('<robot name="asimov_1"/>')
+    env = with_robot(make_env(), urdf)
+    run = str(tmp_path / "run")
+    # Nothing recorded, or no local robot model now: there is nothing to compare.
+    assert robot_model_check(run, env) == ("unchecked", None)
+    write_code_state(os.path.join(run, "params"), record_code_state(env))
+    assert robot_model_check(run, make_env()) == ("unchecked", None)
+
+    assert robot_model_check(run, env) == ("matched", None)
+    before = hashlib.sha256(urdf.read_bytes()).hexdigest()[:12]
+    urdf.write_text('<robot name="asimov_1"><link name="base"/></robot>')
+    after = hashlib.sha256(urdf.read_bytes()).hexdigest()[:12]
+    line = f"asimov_1.urdf @ unknown (sha256 {before}) -> asimov_1.urdf @ unknown (sha256 {after})"
+    assert robot_model_check(run, env) == ("changed", line)
+
+
+def test_a_robot_model_edited_at_the_same_commit_names_the_uncommitted_changes():
+    record = {"urdf_filepath": "urdf/asimov_1.urdf", "commit": "732cc60dcb8f", "sha256": "bcd9a911c193de"}
+    assert _model_where({**record, "dirty": False}) == "urdf/asimov_1.urdf @ 732cc60 (sha256 bcd9a911c193)"
+    assert _model_where({**record, "dirty": True}) == (
+        "urdf/asimov_1.urdf @ 732cc60 with uncommitted changes (sha256 bcd9a911c193)"
+    )
+    assert "(uncommitted changes unknown)" in _model_where({**record, "dirty": None})
+
+
 def test_remote_credentials_are_not_recorded():
     assert _without_credentials("https://user:token@github.com/org/repo.git") == "https://github.com/org/repo.git"
     assert _without_credentials("git@github.com:org/repo.git") == "git@github.com:org/repo.git"
-
-
-def test_old_runs_fall_back_to_the_git_records_rsl_rl_wrote(tmp_path):
-    git = tmp_path / "git"
-    git.mkdir()
-    header = "--- git commit ---\n{}\n\n\n--- git status ---\nOn branch {}\nnothing to commit\n\n\n--- git diff ---\n{}"
-    (git / "drift.diff").write_text(header.format("32aef5c5ec11641f785bfd3c4aebb9c4de6bdc6b", "exp/drift", ""))
-    wip = "diff --git a/source/cyclotron/cyclotron/tasks/rewards.py b/source/cyclotron/cyclotron/tasks/rewards.py\n+w = 1\n"
-    (git / "wip.diff").write_text(header.format("bdf28f5e8b60584fd6b8b50b7433d639c5d8b958", "main", wip))
-    assert read_git_records(str(tmp_path)) == [
-        {
-            "file": "drift.diff",
-            "commit": "32aef5c5ec11641f785bfd3c4aebb9c4de6bdc6b",
-            "branch": "exp/drift",
-            "dirty": False,
-            "diff_files": [],
-        },
-        {
-            "file": "wip.diff",
-            "commit": "bdf28f5e8b60584fd6b8b50b7433d639c5d8b958",
-            "branch": "main",
-            "dirty": True,
-            "diff_files": ["source/cyclotron/cyclotron/tasks/rewards.py"],
-        },
-    ]
-    empty = tmp_path / "empty"
-    empty.mkdir()
-    assert code_differences(str(empty), record_code_state()) == [
-        "the run has no record of its code (no params/code_state.yaml or git/), so code changes can't be checked"
-    ]
-
-
-@pytest.mark.skipif(shutil.which("git") is None, reason="needs git")
-def test_files_changed_since_ignores_pure_renames(tmp_path):
-    def git(*args):
-        return subprocess.run(["git", "-C", str(tmp_path), *args], check=True, capture_output=True, text=True).stdout
-
-    git("init", "-q")
-    git("config", "user.email", "test@example.com")
-    git("config", "user.name", "test")
-    git("config", "commit.gpgsign", "false")
-    (tmp_path / "source" / "old_name").mkdir(parents=True)
-    (tmp_path / "source" / "old_name" / "rewards.py").write_text("weight = 1.0\n" * 20)
-    (tmp_path / "source" / "old_name" / "obs.py").write_text("scale = 0.25\n" * 20)
-    git("add", ".")
-    git("commit", "-q", "-m", "trained here")
-    commit = git("rev-parse", "HEAD").strip()
-    git("mv", "source/old_name", "source/new_name")
-    (tmp_path / "source" / "new_name" / "obs.py").write_text("scale = 0.5\n" + "scale = 0.25\n" * 19)
-    assert files_changed_since(str(tmp_path), commit) == ["source/new_name/obs.py"]
-    assert files_changed_since(str(tmp_path), "0" * 40) is None
+    # No part of a password with an @ in it is left behind.
+    assert _without_credentials("https://user:p@ss@host.com/org/repo.git") == "https://host.com/org/repo.git"
+    assert _without_credentials("https://token@github.com/org/repo.git") == "https://github.com/org/repo.git"
+    # An @ after the host belongs to the path, not to the credentials.
+    assert _without_credentials("https://host.com/org/repo@v1.git") == "https://host.com/org/repo@v1.git"
 
 
 @pytest.mark.skipif(shutil.which("git") is None, reason="needs git")
@@ -473,41 +250,29 @@ def test_edited_run_configs_compares_with_the_sha256_training_recorded(tmp_path)
     assert edited_run_configs(str(tmp_path)) == ["env.yaml", "agent.yaml"]
 
 
-def test_rebuild_differences_flags_values_unlike_the_run_and_lists_settings_it_did_not_save(tmp_path):
-    params = tmp_path / "params"
-    params.mkdir()
-    (params / "env.yaml").write_text(dump(make_env()))
-    (params / "agent.yaml").write_text(dump(make_agent()))
-    assert rebuild_differences(load_run_configs(str(tmp_path)), make_env(), make_agent()) == ([], [])
-
-    env, agent = make_env(), make_agent()
-    env["actions"]["joint_pos"]["scale"] = 0.5
-    env["actions"]["joint_pos"]["clip"] = {".*": (-1.0, 1.0)}  # a setting added to the code since training
-    agent["actor"]["activation"] = "relu"
-    assert rebuild_differences(load_run_configs(str(tmp_path)), env, agent) == (
-        ["env.actions.joint_pos.scale: 0.25 -> 0.5", "agent.actor.activation: elu -> relu"],
-        ["env.actions.joint_pos.clip[.*]: none -> [-1.0, 1.0]"],
-    )
-
-
 def test_describe_changes_is_quiet_when_nothing_changed_and_warns_otherwise(tmp_path):
     params = tmp_path / "params"
     params.mkdir()
     (params / "env.yaml").write_text(dump(make_env()))
     (params / "agent.yaml").write_text(dump(make_agent()))
-    write_code_state(str(params), record_code_state(make_env()))
-    assert describe_changes(str(tmp_path), make_env(), make_agent(), "Behaviour may differ.") == (
+    io = {"actions": {"joint_names": ["left_hip", "right_hip"], "scale": [0.25, 0.25]}, "observations": {}}
+    write_code_state(str(params), {"cyclotron": TRAINED_ON, "policy_io": io})
+    assert describe_changes(str(tmp_path), make_env(), make_agent(), "Behaviour may differ.", io) == (
         "[INFO] Checked the run against the current code: nothing changed since training.",
         "ok",
     )
 
-    # Only the code changed.
-    state = record_code_state(make_env())
-    state["cyclotron"]["files"]["removed_since.py"] = "0" * 64
-    write_code_state(str(params), state)
-    message, level = describe_changes(str(tmp_path), make_env(), make_agent(), "Behaviour may differ.")
-    assert level == "warning" and "  Code:" in message and "Policy settings" not in message
-    write_code_state(str(params), record_code_state(make_env()))
+    # The robot model resolves the actions to other joints.
+    swapped = {**io, "actions": {"joint_names": ["right_hip", "left_hip"], "scale": [0.25, 0.25]}}
+    message, level = describe_changes(str(tmp_path), make_env(), make_agent(), "Behaviour may differ.", swapped)
+    assert level == "warning"
+    assert message.splitlines() == [
+        "[WARNING] The code has changed since this run was trained.",
+        "  Joints and gains the policy's inputs and outputs resolve to:",
+        "    action joint 0: left_hip -> right_hip",
+        "    action joint 1: right_hip -> left_hip",
+        "  Behaviour may differ.",
+    ]
 
     env, agent = make_env(), make_agent()
     env["actions"]["joint_pos"]["scale"] = 0.5
@@ -523,9 +288,8 @@ def test_describe_changes_is_quiet_when_nothing_changed_and_warns_otherwise(tmp_
     message, level = describe_changes(str(tmp_path), env, agent, "Behaviour may differ.")
     assert level == "error" and "agent.actor.activation: elu -> relu" in message and "Behaviour" not in message
     # The error names the commit to check out, from the run's code_state.yaml.
-    assert re.fullmatch(
-        r"  Check out the code the run was trained with \(.+ @ [0-9a-f]{7}.*\), or train a new run\.",
-        message.splitlines()[-1],
+    assert message.splitlines()[-1] == (
+        "  Check out the code the run was trained with (exp/drift @ 32aef5c), or train a new run."
     )
 
     os.remove(params / "env.yaml")
@@ -533,31 +297,20 @@ def test_describe_changes_is_quiet_when_nothing_changed_and_warns_otherwise(tmp_
     assert level == "warning" and "can't be checked" in message
 
 
-def test_policy_shape_errors_name_the_inputs_outputs_and_layers():
-    saved = {"mlp.0.weight": torch.zeros(512, 78), "mlp.2.weight": torch.zeros(23, 512), "std": torch.zeros(23)}
-    current = {"mlp.0.weight": torch.zeros(512, 55), "mlp.2.weight": torch.zeros(12, 512), "std": torch.zeros(12)}
-    assert policy_shape_errors(saved, current) == [
-        "mlp.0.weight: checkpoint [512, 78], current code [512, 55] (the policy takes 78 inputs; the current"
-        " observations give 55)",
-        "mlp.2.weight: checkpoint [23, 512], current code [12, 512] (the policy gives 23 actions; the current code"
-        " expects 12)",
-        "std: checkpoint [23], current code [12]",
-    ]
-    rnn = {"rnn.weight_ih_l0": torch.zeros(256, 78), "mlp.0.weight": torch.zeros(23, 256)}
-    assert policy_shape_errors(rnn, {"mlp.0.weight": torch.zeros(512, 78)}) == [
-        "the network's layers changed:",
-        "  only in the checkpoint: rnn.weight_ih_l0",
-        "mlp.0.weight: checkpoint [23, 256], current code [512, 78]",
-    ]
-    assert policy_shape_errors(saved, saved) == []
-
-
 def write_git_record(run_dir, name: str, commit: str, branch: str, diff: str = "") -> None:
     git = run_dir / "git"
-    git.mkdir(exist_ok=True)
+    git.mkdir(parents=True, exist_ok=True)
     (git / name).write_text(
         f"--- git commit ---\n{commit}\n\n\n--- git status ---\nOn branch {branch}\n\n\n--- git diff ---\n{diff}"
     )
+
+
+def test_where_says_when_uncommitted_changes_are_unknown():
+    assert _where(TRAINED_ON) == "exp/drift @ 32aef5c"
+    assert _where({**TRAINED_ON, "dirty": True}) == "exp/drift @ 32aef5c with uncommitted changes"
+    assert _where({**TRAINED_ON, "dirty": None}) == "exp/drift @ 32aef5c (uncommitted changes unknown)"
+    assert _where({**TRAINED_ON, "branch": None}) == "a detached HEAD @ 32aef5c"
+    assert _where({"commit": None}) == "code git doesn't track"
 
 
 def test_training_code_names_the_commit_to_check_out(tmp_path):
@@ -567,58 +320,31 @@ def test_training_code_names_the_commit_to_check_out(tmp_path):
     )
     assert training_code(str(new_run)) == "exp/drift @ 32aef5c with uncommitted changes"
     # Runs from before code_state.yaml: every commit rsl_rl logged, since either could be the training code.
-    old_run.mkdir()
     write_git_record(old_run, "drift.diff", "32aef5c5ec11641f785bfd3c4aebb9c4de6bdc6b", "exp/drift")
-    write_git_record(old_run, "isaac_asimov.diff", "bdf28f5e8b60584fd6b8b50b7433d639c5d8b958", "main")
+    write_git_record(old_run, "isaac_asimov.diff", "bdf28f5e8b60584fd6b8b50b7433d639c5d8b958", "main", "+w = 1\n")
     assert training_code(str(old_run)) == (
-        "exp/drift @ 32aef5c (git/drift.diff) or main @ bdf28f5 (git/isaac_asimov.diff)"
+        "exp/drift @ 32aef5c (git/drift.diff) or main @ bdf28f5 with uncommitted changes (git/isaac_asimov.diff)"
     )
+    assert check_out_hint(str(old_run)).startswith("Check out the code the run was trained with (exp/drift @")
     unknown.mkdir()
     assert training_code(str(unknown)) is None
+    assert check_out_hint(str(unknown)) == (
+        "Train a new run, or check out the code the run was trained with (the run doesn't record its commit)."
+    )
 
 
 def test_training_commit_returns_a_single_raw_commit_or_none(tmp_path):
     new_run, old_run, ambiguous = tmp_path / "new", tmp_path / "old", tmp_path / "ambiguous"
-    write_code_state(str(new_run / "params"), {"cyclotron": {"commit": "32aef5c5ec11", "branch": "exp/drift"}})
+    write_code_state(str(new_run / "params"), {"cyclotron": {"commit": "32aef5c5ec11", "dirty": False}})
     assert training_commit(str(new_run)) == "32aef5c5ec11"
     write_code_state(str(new_run / "params"), {"cyclotron": {"commit": "32aef5c5ec11", "dirty": True}})
     assert training_commit(str(new_run)) == "32aef5c5ec11-dirty"
-    old_run.mkdir()
+    # Unknown isn't clean: the commit alone isn't known to be the code.
+    write_code_state(str(new_run / "params"), {"cyclotron": {"commit": "32aef5c5ec11", "dirty": None}})
+    assert training_commit(str(new_run)) == "32aef5c5ec11-dirty"
     write_git_record(old_run, "isaac_asimov.diff", "bdf28f5e8b60584fd6b8b50b7433d639c5d8b958", "main")
     assert training_commit(str(old_run)) == "bdf28f5e8b60584fd6b8b50b7433d639c5d8b958"
     # Two logged repositories: either could be the training code, so no single commit is named.
-    ambiguous.mkdir()
     write_git_record(ambiguous, "a.diff", "32aef5c5ec11641f785bfd3c4aebb9c4de6bdc6b", "exp/drift")
     write_git_record(ambiguous, "b.diff", "bdf28f5e8b60584fd6b8b50b7433d639c5d8b958", "main")
     assert training_commit(str(ambiguous)) is None
-
-
-def test_load_policy_loads_only_the_actor_or_names_the_training_code(tmp_path):
-    torch.manual_seed(0)
-    trained = torch.nn.Sequential(torch.nn.Linear(78, 8), torch.nn.ELU(), torch.nn.Linear(8, 23))
-    checkpoint = tmp_path / "model_1.pt"
-    torch.save(
-        {"actor_state_dict": trained.state_dict(), "critic_state_dict": {"0.weight": torch.zeros(1, 96)}}, checkpoint
-    )
-    write_git_record(tmp_path, "drift.diff", "32aef5c5ec11641f785bfd3c4aebb9c4de6bdc6b", "exp/drift")
-
-    loads = []
-    policy = {"network": torch.nn.Sequential(torch.nn.Linear(78, 8), torch.nn.ELU(), torch.nn.Linear(8, 23))}
-    runner = SimpleNamespace(
-        alg=SimpleNamespace(get_policy=lambda: policy["network"]),
-        load=lambda path, load_cfg=None: loads.append(load_cfg),
-    )
-    load_policy(runner, str(checkpoint), "OnPolicyRunner", str(tmp_path))
-    assert loads == [{"actor": True}]
-
-    policy["network"] = torch.nn.Sequential(torch.nn.Linear(55, 8), torch.nn.ELU(), torch.nn.Linear(8, 23))
-    with pytest.raises(ValueError) as error:
-        load_policy(runner, str(checkpoint), "OnPolicyRunner", str(tmp_path))
-    assert str(error.value).splitlines() == [
-        "The checkpoint's policy doesn't fit the network the current code builds:",
-        "  0.weight: checkpoint [8, 78], current code [8, 55] (the policy takes 78 inputs; the current observations"
-        " give 55)",
-        "The policy's inputs or network changed since training; see the warning above.",
-        "Check out the code the run was trained with (exp/drift @ 32aef5c (git/drift.diff)), or train a new run.",
-    ]
-    assert loads == [{"actor": True}]

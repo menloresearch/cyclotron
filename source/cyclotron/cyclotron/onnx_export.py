@@ -12,8 +12,10 @@ import numpy as np
 import torch
 from tensordict import TensorDict
 
-from cyclotron.code_state import CODE_STATE_FILE, RUN_CONFIGS, urdf_filepath
+from cyclotron.code_state import CODE_STATE_FILE, code_state_missing, training_commit, training_robot_model
 from cyclotron.hub import checkpoints
+from cyclotron.policy_io import observation_names
+from cyclotron.run_config import RUN_CONFIGS
 
 # The run's training config, copied next to policy.onnx so the export folder has the same files as a shared Hub repo.
 BUNDLE_YAMLS = RUN_CONFIGS
@@ -40,8 +42,9 @@ def deploy_metadata(
     observation_names: list[str],
     trained_commit: str | None,
     robot_model: dict | None = None,
-    trained_outside_cyclotron: bool = False,
+    code_state_missing: bool = False,
     actor_code: str | None = None,
+    robot_model_check: str | None = None,
 ) -> dict[str, str]:
     """The deployment contract of a policy, as the strings stored in ONNX metadata.
 
@@ -51,8 +54,9 @@ def deploy_metadata(
     the PD gains the targets were trained to be tracked with, the rate the policy was trained to run at, the ordered
     observation terms its input is built from, and, for traceability, the training commit and the robot model the run
     was trained with (``robot_model`` as ``code_state.yaml`` records it), and whether the code of the network
-    (``actor_code``: ``unchanged``, ``changed`` or ``unrecorded``) matched what the run was trained with. Training
-    settings stay in the yaml files next to the ONNX; they are not deployment inputs.
+    (``actor_code``: ``unchanged``, ``changed`` or ``unrecorded``) and the robot model export resolved the joints and
+    gains with (``robot_model_check``: ``matched``, ``changed`` or ``unchecked``) matched what the run was trained
+    with. Training settings stay in the yaml files next to the ONNX; they are not deployment inputs.
     """
     per_joint = [action_scale, action_offset, joint_stiffness, joint_damping]
     if any(len(values) != len(joint_names) for values in per_joint):
@@ -80,18 +84,55 @@ def deploy_metadata(
         fields = {
             "name": robot_model.get("name"),
             "repo": robot_model.get("repo"),
-            "urdf_filepath": urdf_filepath(robot_model),
+            "urdf_filepath": robot_model.get("urdf_filepath"),
             "sha256": robot_model.get("sha256"),
             "commit": robot_model.get("commit"),
         }
         metadata.update({f"robot_model_{key}": value for key, value in fields.items() if value})
         if robot_model.get("dirty") is not None:
             metadata["robot_model_dirty"] = json.dumps(bool(robot_model["dirty"]))
-    if trained_outside_cyclotron:
-        metadata["trained_outside_cyclotron"] = "true"
+    if code_state_missing:
+        metadata["code_state_missing"] = "true"
     if actor_code:
         metadata["actor_code"] = actor_code
+    if robot_model_check:
+        metadata["robot_model_check"] = robot_model_check
     return metadata
+
+
+def deploy_metadata_from_io(
+    io: dict,
+    raw_action_clip: float | None,
+    sim_dt: float,
+    decimation: int,
+    run_dir: str,
+    actor_code: str | None,
+    robot_model_check: str | None,
+) -> dict[str, str] | None:
+    """``deploy_metadata`` for the policy's inputs and outputs as the live environment resolves them
+    (``resolve_policy_io``), with the run's training record; None when the actions aren't joint position targets,
+    which the contract can't describe (``io["unsupported"]`` says why). ``raw_action_clip`` is the run's
+    ``clip_actions``, which rsl_rl's environment wrapper applies to the raw actions."""
+    actions = io["actions"]
+    if actions is None:
+        return None
+    return deploy_metadata(
+        joint_names=actions["joint_names"],
+        raw_action_clip=raw_action_clip,
+        action_scale=actions["scale"],
+        action_offset=actions["offset"],
+        action_clip=actions["clip"],
+        joint_stiffness=actions["stiffness"],
+        joint_damping=actions["damping"],
+        sim_dt=sim_dt,
+        decimation=decimation,
+        observation_names=observation_names(io),
+        trained_commit=training_commit(run_dir),
+        robot_model=training_robot_model(run_dir),
+        code_state_missing=code_state_missing(run_dir),
+        actor_code=actor_code,
+        robot_model_check=robot_model_check,
+    )
 
 
 def attach_deploy_metadata(onnx_path: str, metadata: dict[str, str]) -> None:
@@ -156,8 +197,16 @@ def existing_export_note(run_dir: str, output_dir: str) -> str | None:
 
 def replace_export(staging: str, output_dir: str) -> None:
     """Move a checked export from ``staging`` into ``output_dir``, replacing the previous export's files, and remove
-    ``staging``. Export writes into a staging folder first so that a failed check leaves the previous export as is."""
-    for name in sorted(os.listdir(staging)):
+    ``staging``. Export writes into a staging folder first so that a failed check leaves the previous export as is.
+
+    A bundle file the previous export wrote and this one doesn't (a ``code_state.yaml`` from another run) is removed,
+    so the folder never mixes two exports; ``export.log`` and files of your own are left alone.
+    """
+    written = set(os.listdir(staging))
+    for name in ("policy.onnx", "policy.pt", *BUNDLE_YAMLS, *OPTIONAL_BUNDLE_YAMLS):
+        if name not in written and os.path.isfile(os.path.join(output_dir, name)):
+            os.remove(os.path.join(output_dir, name))
+    for name in sorted(written):
         os.replace(os.path.join(staging, name), os.path.join(output_dir, name))
     os.rmdir(staging)
 
@@ -192,11 +241,56 @@ def _full_float32():
 
 
 def _largest_gap(expected: np.ndarray, actual: np.ndarray) -> float:
-    """The largest absolute difference, or inf when either side is not finite: ``max`` drops a NaN, so a NaN
-    difference would otherwise pass any tolerance."""
+    """The largest difference, relative to the expected value where that is above 1, since float32 rounding grows
+    with the value; inf when either side is not finite: ``max`` drops a NaN, so a NaN difference would otherwise
+    pass any tolerance."""
     if not (np.isfinite(expected).all() and np.isfinite(actual).all()):
         return float("inf")
-    return float(np.abs(expected - actual).max())
+    return float((np.abs(expected - actual) / np.maximum(1.0, np.abs(expected))).max())
+
+
+def _check_inputs(
+    policy: torch.nn.Module, obs: TensorDict, num_samples: int, seed: int
+) -> tuple[torch.Tensor, TensorDict]:
+    """The observations the export checks run: the first observation as is, and ``num_samples - 1`` noisy copies of
+    it that widen the check beyond a single input. The noise on each entry is on the scale of that entry (at least
+    0.1), so a small term such as a scaled joint velocity moves without leaving anything like its range. Returned flat (the policy's groups concatenated in its order, as
+    the exported files take them, on the CPU) and as the batch the PyTorch policy takes."""
+    groups = list(policy.obs_groups)
+    first = TensorDict({group: obs[group][:1].float().cpu() for group in groups}, batch_size=[1])
+    flat = torch.cat([first[group] for group in groups], dim=-1)
+    generator = torch.Generator().manual_seed(seed)
+    noise = torch.randn((num_samples - 1, flat.shape[-1]), generator=generator) * flat.abs().clamp(min=0.1)
+    samples = torch.cat([flat, flat + noise])
+
+    sizes = [first[group].shape[-1] for group in groups]
+    device = next(policy.parameters()).device
+    batch = TensorDict(dict(zip(groups, samples.split(sizes, dim=-1))), batch_size=[num_samples]).to(device)
+    return samples, batch
+
+
+def _policy_steps(policy: torch.nn.Module, batch: TensorDict) -> list[list[np.ndarray]]:
+    """What the PyTorch policy gives for ``batch`` at each step checked: its actions and, for a recurrent policy,
+    its memory, as (layers, samples, size) per state (the hidden state, and the cell state of an LSTM).
+
+    A recurrent policy (an LSTM or GRU) runs ``RECURRENT_STEPS`` steps from an empty memory, the way a robot starts.
+    The first step alone would not do: from an empty memory, the weights that carry memory between steps multiply
+    zeros. Its memory is cleared before and after.
+    """
+    recurrent = policy.is_recurrent
+    if recurrent:
+        policy.reset()
+    steps = []
+    for _ in range(RECURRENT_STEPS if recurrent else 1):
+        with torch.inference_mode(), _full_float32():
+            step = [policy(batch).cpu().numpy()]
+            if recurrent:
+                memory = policy.get_hidden_state()
+                step += [state.cpu().numpy() for state in (memory if isinstance(memory, tuple) else (memory,))]
+        steps.append(step)
+    if recurrent:
+        policy.reset()
+    return steps
 
 
 def max_onnx_difference(
@@ -205,27 +299,13 @@ def max_onnx_difference(
     """Run the same observations through the PyTorch policy and the exported ONNX file; return the largest
     difference between their actions.
 
-    The first observation is used as is, and ``num_samples - 1`` noisy copies of it widen the check beyond a
-    single input. A large difference means the export is wrong, e.g. it dropped the observation normalizer.
-
-    A recurrent policy (an LSTM or GRU) is checked over ``RECURRENT_STEPS`` steps from an empty memory, the way a
-    robot starts: the PyTorch policy's memory is cleared, the ONNX file gets zeros as ``h_in`` (and ``c_in``), and
-    the memory it returns (``h_out``, ``c_out``) is fed back in, as a runtime does. The returned memory is compared
-    too. The first step alone would not do: from an empty memory, the weights that carry memory between steps
-    multiply zeros.
+    A large difference means the export is wrong, e.g. it dropped the observation normalizer. A recurrent policy is
+    checked over its steps (see ``_policy_steps``): the ONNX file gets zeros as ``h_in`` (and ``c_in``), and the
+    memory it returns (``h_out``, ``c_out``) is fed back in, as a runtime does. The returned memory is compared too.
     """
     import onnxruntime as ort
 
-    groups = list(policy.obs_groups)
-    first = TensorDict({group: obs[group][:1].float().cpu() for group in groups}, batch_size=[1])
-    flat = torch.cat([first[group] for group in groups], dim=-1)
-    generator = torch.Generator().manual_seed(seed)
-    noise = torch.randn((num_samples - 1, flat.shape[-1]), generator=generator)
-    samples = torch.cat([flat, flat + noise])
-
-    sizes = [first[group].shape[-1] for group in groups]
-    device = next(policy.parameters()).device
-    batch = TensorDict(dict(zip(groups, samples.split(sizes, dim=-1))), batch_size=[num_samples]).to(device)
+    samples, batch = _check_inputs(policy, obs, num_samples, seed)
     # The exported graph has a fixed batch size of 1, so the ONNX file runs the samples one at a time. A recurrent
     # graph's inputs after obs are its memory, matching its outputs after the actions in order.
     session = ort.InferenceSession(onnx_path, providers=["CPUExecutionProvider"])
@@ -233,17 +313,8 @@ def max_onnx_difference(
     empty = {i.name: np.zeros([d if isinstance(d, int) else 1 for d in i.shape], np.float32) for i in memory_inputs}
     memories = [empty] * num_samples
 
-    recurrent = policy.is_recurrent
-    if recurrent:
-        policy.reset()
     difference = 0.0
-    for _ in range(RECURRENT_STEPS if recurrent else 1):
-        with torch.inference_mode(), _full_float32():
-            expected = [policy(batch).cpu().numpy()]
-            if recurrent:
-                memory = policy.get_hidden_state()
-                # (layers, samples, size) per state: the hidden state, and the cell state of an LSTM.
-                expected += [state.cpu().numpy() for state in (memory if isinstance(memory, tuple) else (memory,))]
+    for expected in _policy_steps(policy, batch):
         outputs = [
             session.run(None, {obs_input.name: sample[None].numpy(), **memories[i]}) for i, sample in enumerate(samples)
         ]
@@ -252,6 +323,30 @@ def max_onnx_difference(
             actual = np.stack([out[index][:, 0] for out in outputs], axis=1)
             difference = max(difference, _largest_gap(state, actual))
         memories = [{i.name: out[1 + n] for n, i in enumerate(memory_inputs)} for out in outputs]
-    if recurrent:
-        policy.reset()
+    return float(difference)
+
+
+def max_jit_difference(
+    policy: torch.nn.Module, obs: TensorDict, jit_path: str, num_samples: int = 64, seed: int = 0
+) -> float:
+    """Like ``max_onnx_difference``, for the TorchScript ``policy.pt``, which rsl_rl writes with its own exporter
+    separately from ``policy.onnx``: one being right says nothing about the other.
+
+    A recurrent ``policy.pt`` keeps its memory inside, for one robot at a time, so each sample runs through the
+    steps on its own after a ``reset()``; the memory it keeps is compared too.
+    """
+    samples, batch = _check_inputs(policy, obs, num_samples, seed)
+    steps = _policy_steps(policy, batch)
+    jit_policy = torch.jit.load(jit_path, map_location="cpu")
+    memory_names = ("hidden_state", "cell_state")
+    difference = 0.0
+    with torch.no_grad():
+        for i, sample in enumerate(samples):
+            jit_policy.reset()
+            for expected in steps:
+                difference = max(difference, _largest_gap(expected[0][i : i + 1], jit_policy(sample[None]).numpy()))
+                buffers = dict(jit_policy.named_buffers(recurse=False))
+                memory = [buffers[name].numpy() for name in memory_names if name in buffers]
+                for state, actual in zip(expected[1:], memory):
+                    difference = max(difference, _largest_gap(state[:, i : i + 1], actual))
     return float(difference)

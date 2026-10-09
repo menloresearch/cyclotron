@@ -23,7 +23,9 @@ Or view a run you exported with [`--export`](export.md):
 
 The only requirement is [Node.js](https://nodejs.org) 20 or newer. The first
 run fetches the `third_party/humanoid-policy-viewer` submodule, its npm
-dependencies and the Asimov 1 robot model. The viewer then checks the policy,
+dependencies and the Asimov 1 robot model; after a pull that moves the
+submodule, the next run updates it and its dependencies (unless it has
+uncommitted changes, which are left alone with a warning). The viewer then checks the policy,
 starts a local server and opens the browser with the policy selected (over SSH
 or without a display it prints a link instead; see
 [Advanced examples](#advanced-examples)). Use the sliders to command a

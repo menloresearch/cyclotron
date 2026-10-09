@@ -134,10 +134,10 @@ Load the latest checkpoint and visualize the trained policy:
 ```
 
 Use `--checkpoint` to select a specific checkpoint (`--target` is an alias).
-`--checkpoint` works the same way for `--train`, `--play`, `--export` and
-`--share`: pass a full path to a `.pt` file, or a filename such as
-`model_500.pt` together with `--load_run <run>`. Without it, the latest
-checkpoint is used. Play runs the checkpoint itself and writes no ONNX; use
+`--checkpoint` works the same way for `--train`, `--play` and `--export`:
+pass a full path to a `.pt` file, or a filename such as `model_500.pt`
+together with `--load_run <run>`. `--share` takes the run folder itself, so
+there a filename alone is enough. Without it, the latest checkpoint is used. Play runs the checkpoint itself and writes no ONNX; use
 [`--export`](#export-a-policy) for that. Before running, play warns about
 anything that changed in the code since the run was trained; see
 [Code changes since training](#code-changes-since-training).
@@ -168,8 +168,8 @@ can also pick the checkpoint the same way as `--play`, for example
 `--task Asimov1-Velocity-AMP-v0 --load_run <run>` for that run's latest
 checkpoint. Use `--output <folder>` to write somewhere else. Export runs Isaac
 Sim headless with one environment. It then feeds the same observations to the
-checkpoint and to `policy.onnx`, and fails if their actions differ by more than
-1e-4, which would mean the export is broken (for example, a dropped observation
+checkpoint, to `policy.onnx` and to `policy.pt`, and fails if their actions
+differ by more than 1e-4 (relative, for values above 1), which would mean the export is broken (for example, a dropped observation
 normalizer).
 
 `policy.onnx` also carries a small deployment contract in its ONNX metadata,
@@ -197,14 +197,26 @@ first sets the policy settings back to the ones the run saved in `env.yaml` and
 [What `--export` does](docs/export.md#what---export-does)), but the code behind
 them, such as the observation functions and the robot model, is still the
 current one. Training therefore writes `params/code_state.yaml` next to
-`env.yaml` and `agent.yaml`: the git commit and branch, a hash of every
-training-code file in the cyclotron package, the Isaac Lab commit, a hash of
-the robot model, the `isaacsim`, `isaaclab`, `rsl-rl-lib` and `torch`
-versions, and a hash of each rsl_rl module behind the policy's network
-(`actor_code`). It holds hashes, not code. It also records the sha256 of the
-`env.yaml` and `agent.yaml` written next to it: they are the record of how the
-run was trained, so `--export` and `--share` refuse a run whose files no
-longer match (edited by hand, or deleted).
+`env.yaml` and `agent.yaml`, with only what the checks below use or a reader
+needs to find the training code again:
+
+- the git commit and branch, and whether there were uncommitted changes, plus
+  the Isaac Lab commit and the `isaacsim`, `isaaclab`, `rsl-rl-lib` and
+  `torch` versions (recorded, not compared);
+- the robot model: its URDF's sha256 and the commit of the repository it
+  comes from (`robot_model`);
+- the sha256 of the code behind the policy's network: every module of
+  rsl_rl's `models` and `modules`, and a custom network's own module
+  (`actor_code`);
+- the joints and gains the policy's settings resolved to on that robot model:
+  each action joint in order with its scale, offset, clip, stiffness and
+  damping, and the joints or bodies each observation term reads
+  (`policy_io`);
+- the sha256 of the `env.yaml` and `agent.yaml` written next to it: they are
+  the record of how the run was trained, so `--export` and `--share` refuse a
+  run whose files no longer match (edited by hand, or deleted).
+
+It holds hashes and names, not code or local paths.
 
 Before loading a checkpoint, export and play compare the run with the current
 code and print what changed:
@@ -222,16 +234,26 @@ code and print what changed:
   AMP inputs, rewards, events, terrain, command ranges and observation noise
   are not compared: they only shape training, and the play tasks change some
   of them.
-- **Code**: cyclotron files that changed, and changes to Isaac Lab, the robot
-  model or the package versions. Runs trained before `code_state.yaml` existed
-  are compared with the commits rsl_rl logged in the run's `git/` folder.
-  This list is `--play`'s. `--export` compares only the code of the policy's
-  network (`actor_code`): it is the one change the export's later checks
-  can't see, since the weights load and the ONNX file agrees with the
-  changed code (check 11 in [export.md](docs/export.md#checks-step-by-step)).
+- **Joints and gains**: what the settings resolve to on the robot model the
+  current code loads, compared with `policy_io`, one line per joint
+  (`action joint 4: left_knee -> left_hip_pitch`). Settings that name joints
+  by pattern reach other joints, or other gains, when the robot model
+  changes, and no later check notices. `--export` always stops on these
+  (check 10c in [export.md](docs/export.md#after-building-the-environment)).
+- **Robot model**: whether its URDF still has the recorded sha256 (check
+  10d).
+- **Network code**: the modules in `actor_code` that changed. The weights
+  still load and the ONNX file agrees with the changed code, so this is the
+  only way to notice (check 11).
+
+  Nothing else is compared: not the rest of this package, Isaac Lab or the
+  package versions. Runs trained before `code_state.yaml` existed have only
+  the commit rsl_rl logged in the run's `git/` folder, used to name the
+  commit to check out.
 
 Code changes are warnings, since experiments change code on purpose; add
-`--strict` to stop instead. A checkpoint whose policy no longer fits the
+`--strict` to stop instead. `--export` stops on changed joints and gains
+without it. A checkpoint whose policy no longer fits the
 network always stops, for example because an observation term was added and
 the input size changed. For `--play`, so does a changed actor class or
 activation, which would load the old weights but compute something else;
@@ -253,15 +275,15 @@ Share a finished run on the Hugging Face Hub. Log in first with
     --repo-id <user_or_org>/<repo_name>
 ```
 
-This uploads `agent.yaml`, `env.yaml`, `policy.onnx`, `code_state.yaml` (for
+This uploads `agent.yaml`, `env.yaml`, `policy.onnx`, `policy.pt`, `code_state.yaml` (for
 runs that have one) and a generated `README.md` model card (BSD-3-Clause, `library_name: asimov`,
 `pipeline_tag: robotics`). Sharing publishes the policy, so the checkpoint is
 always re-exported first with [`--export`](docs/export.md)'s `--strict` checks:
 a change to the code of the policy's network, or policy settings the run
 didn't save, stop the upload instead of warning, and an
-`exported/policy.onnx` already on disk is never uploaded (pass `--onnx <file>`
+`exported/` folder already on disk is never uploaded (pass `--onnx <file>`
 to upload a file as is). Use `--checkpoint` to share a
-different checkpoint (a full path, or a filename inside the run directory). Use `--title "<text>"` to set the card's title,
+different checkpoint of the same run (a filename inside the run directory, or a full path to one). Use `--title "<text>"` to set the card's title,
 `--summary "<text>"` to add a paragraph describing your training method,
 `--private` to create a private repo, and `--dry-run` to preview the card
 without uploading.

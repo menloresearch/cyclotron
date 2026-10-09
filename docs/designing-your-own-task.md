@@ -76,17 +76,21 @@ or inherit from it directly if your changes and its changes compose:
 class Asimov1SlowWalkEnvCfg_PLAY(Asimov1SlowWalkEnvCfg, Asimov1VelocityEnvCfg_PLAY):
     def __post_init__(self):
         super().__post_init__()
-        # _PLAY resets the command ranges for the stock task; restore ours.
+        # Show a steady walk, inside the trained range.
         self.commands.twist.ranges.lin_vel_x = (0.2, 0.4)
 ```
 
-With this ordering Python runs `Asimov1VelocityEnvCfg_PLAY.__post_init__`
-(32 envs, corruption off, pushes and randomization events removed, zeroed
-resets, a small terrain) on top of your variant. Check what the play base
-sets against what you changed: it overwrites `commands.twist.ranges`, so the
-example puts the slow ranges back. If the interaction gets confusing, skip
-the double inheritance and copy the `_PLAY` body into a plain subclass of
-your task.
+Python looks the classes up in the order listed (your variant, then
+`Asimov1VelocityEnvCfg_PLAY`, then `Asimov1VelocityEnvCfg`), and each
+`__post_init__` calls `super()` first, so the bodies run the other way round:
+the stock task's, then the play base's (32 envs, corruption off, pushes and
+randomization events removed, zeroed resets, a small terrain), then your
+variant's, then the play twin's own. Your variant's changes therefore win
+over the play base's. That keeps the slow command ranges, which the play base
+sets for the stock task, but it also undoes anything the play base turns off
+that your variant sets again (an event, `scene.num_envs`), so set those back
+in the play twin. If the interaction gets confusing, skip the double
+inheritance and copy the `_PLAY` body into a plain subclass of your task.
 
 ## 3. Add a runner config with a new experiment name
 
@@ -260,9 +264,10 @@ for everything downstream of training. Break them knowingly or not at all.
    or re-centering actions silently scrambles a deployed robot.
 4. **Changing the policy's observations or actions changes what existing
    checkpoints are compatible with.** A checkpoint stores the config it was
-   trained with; after you edit the task, `--play` and `--export` rebuild the
-   policy from the run's saved `env.yaml` and `agent.yaml` and name what your
-   checkout changed since —
+   trained with; after you edit the task, `--export` rebuilds the policy from
+   the run's saved `env.yaml` and `agent.yaml` and stops where your checkout
+   can't, while `--play` runs the old checkpoint with the current code's
+   settings and names what your checkout changed since —
    see [Code changes since training](../README.md#code-changes-since-training).
    That is the reason to make a new task instead of editing
    `Asimov1VelocityEnvCfg` in place: old runs keep their config, your variant

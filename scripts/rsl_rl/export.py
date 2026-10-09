@@ -4,10 +4,11 @@ Writes ``policy.onnx``, a TorchScript ``policy.pt`` and copies of the run's ``en
 ``code_state.yaml``, so the folder holds the same files as a policy shared on the Hugging Face Hub. Runs Isaac Sim
 headless with one environment to build the policy, like a restart of the run: the policy settings are set back to
 the ones the run saved in its ``env.yaml`` and ``agent.yaml``, which are their only source (no overrides), and are
-checked against those files once the environment is built. Warns if the code of the policy's network (its rsl_rl model
-and the modules it uses, as ``code_state.yaml`` recorded them) changed since the run was trained, loads only the policy
-from the checkpoint, then checks that the ONNX file gives the same actions as the PyTorch policy. A run without
-``env.yaml`` or ``agent.yaml`` can have them written from the current code, if you agree.
+checked against those files once the environment is built. Stops if the joints and gains the policy's inputs and
+outputs resolve to (from the robot model) differ from the ones training recorded in ``code_state.yaml``, and warns if
+the robot model or the code of the policy's network (its rsl_rl models and modules) changed since the run was trained.
+Then it loads only the policy from the checkpoint, and checks that policy.onnx and policy.pt give the same actions as
+the PyTorch policy. A run without ``env.yaml`` or ``agent.yaml`` can have them written from the current code, if you agree.
 """
 
 import argparse
@@ -15,6 +16,7 @@ import os
 import shutil
 import sys
 import tempfile
+import traceback
 
 from isaaclab.app import AppLauncher
 
@@ -22,8 +24,9 @@ from cyclotron.hub import EXPERIMENT_TASKS, infer_task
 
 import cli_args  # isort: skip
 
-# Largest action difference allowed between the PyTorch policy and the ONNX file; float32 rounding stays far below it.
-ONNX_TOLERANCE = 1e-4
+# Largest action difference allowed between the PyTorch policy and policy.onnx or policy.pt, relative to the action
+# where it is above 1; float32 rounding stays far below it.
+EXPORT_TOLERANCE = 1e-4
 
 parser = argparse.ArgumentParser(description="Export a trained Cyclotron checkpoint to ONNX.")
 parser.add_argument(
@@ -48,8 +51,8 @@ parser.add_argument(
 parser.add_argument(
     "--strict",
     action="store_true",
-    help="Stop, instead of warning, if the code of the policy's network changed since the run was trained, or"
-    " anything else doesn't come from the run.",
+    help="Stop, instead of warning, if the code of the policy's network or the robot model changed since the run was"
+    " trained, or anything else doesn't come from the run.",
 )
 AppLauncher.add_app_launcher_args(parser)
 args_cli, unknown_args = parser.parse_known_args()
@@ -111,16 +114,15 @@ from cyclotron.code_state import (
     ACTOR_CODE_CHANGED,
     ACTOR_CODE_UNRECORDED,
     CODE_STATE_FILE,
-    RUN_CONFIGS,
+    ROBOT_MODEL_CHANGED,
+    ROBOT_MODEL_UNCHECKED,
     actor_code_differences,
     check_out_hint,
+    code_state_missing,
     current_code,
     edited_run_configs,
-    load_policy,
-    load_run_configs,
-    rebuild_differences,
-    training_commit,
-    training_robot_model,
+    read_code_state,
+    robot_model_check,
 )
 from cyclotron.onnx_export import (
     BUNDLE_YAMLS,
@@ -128,38 +130,49 @@ from cyclotron.onnx_export import (
     RECURRENT_STEPS,
     attach_deploy_metadata,
     copy_run_yamls,
-    deploy_metadata,
+    deploy_metadata_from_io,
     existing_export_note,
     export_log,
+    max_jit_difference,
     max_onnx_difference,
     replace_export,
 )
+from cyclotron.policy_io import policy_io_differences, resolve_policy_io
+from cyclotron.policy_loading import load_policy
 from cyclotron.run_config import (
+    RUN_CONFIGS,
     generated_run_configs,
+    load_config,
+    load_run_configs,
     mark_generated,
     missing_run_configs,
+    rebuild_differences,
     restore_policy_settings,
-    trained_outside_cyclotron,
 )
 
 installed_version = metadata.version("rsl-rl-lib")
 
 ACTOR_CODE_CONSEQUENCE = (
     "The weights are the run's, but the network that runs them is the current code, so the exported policy may"
-    " compute something else. Only the code of the network is compared (its rsl_rl model and the modules it uses),"
-    " not the rest of the library or of this package."
+    " compute something else. Only the code of the network is compared (rsl_rl's models and modules, and a custom"
+    " network's own module), not the rest of the library or of this package."
 )
 
 
 def ask_to_generate(run_dir: str, missing: list[str], log) -> bool:
-    """Ask in the terminal whether to write the run's missing configs from the current code. No answer is a no."""
+    """Ask in the terminal whether to write the run's missing configs from the current code. No answer, or no
+    terminal to answer in, is a no."""
     files = " and ".join(missing)
     log(f"[WARNING] {run_dir}/params has no {files}, so the settings this run was trained with are unknown.")
     log(
-        f"  Export can write {files} from the current code ({current_code()}) into params/, marked as generated."
-        " The exported policy then gets the current code's settings, which may not be the ones it was trained with."
-        " Only do this from the same codebase and commit the policy was trained with: nothing can verify it."
+        f"  Export can write {files} from the current code ({current_code()}) into params/, marked as generated, once"
+        " the export succeeds. The exported policy then gets the current code's settings, which may not be the ones it"
+        " was trained with. Only do this from the same codebase and commit the policy was trained with: nothing can"
+        " verify it."
     )
+    if not sys.stdin.isatty():
+        log("  No terminal to answer in.")
+        return False
     try:
         answer = input(f"Generate {files} from the current code? [y/N] ").strip()
     except EOFError:
@@ -168,93 +181,59 @@ def ask_to_generate(run_dir: str, missing: list[str], log) -> bool:
     return answer.lower() in ("y", "yes")
 
 
-def _per_joint(value, count: int) -> list[float]:
-    """A term's resolved scale or offset (a float, or a tensor row per env) as one float per joint."""
-    import torch
+def generated_config(cfg) -> str:
+    """A run config written from the current code, starting with a line saying so."""
+    with tempfile.TemporaryDirectory() as folder:
+        path = os.path.join(folder, "config.yaml")
+        dump_yaml(path, cfg)
+        mark_generated(path, current_code(), datetime.now().strftime("%Y-%m-%d %H:%M"))
+        with open(path) as f:
+            return f.read()
 
-    if isinstance(value, torch.Tensor):
-        return [float(v) for v in value[0]]
-    return [float(value)] * count
 
+def check_policy_io(env, run_dir: str, env_cfg: dict, agent: dict, log) -> tuple[dict, str]:
+    """Compare the joints and gains the policy's inputs and outputs resolve to, and the robot model, with the run's.
 
-def _configured_offset(term) -> list[float]:
-    """A joint position action's offset as configured, one float per joint.
-
-    With ``use_default_offset`` the live offset is the default pose of the one environment export builds, which
-    startup events such as ``randomize_joint_default_pos`` perturb. Resolve the robot's configured
-    ``init_state.joint_pos`` the way Isaac Lab builds the default pose instead.
+    Stops (closing ``env``) when the joints or gains changed, and on a changed robot model with --strict. Returns the
+    resolved inputs and outputs (``resolve_policy_io``) and the robot model's status (``robot_model_check``).
     """
-    from isaaclab.utils.string import resolve_matching_names_values
-
-    if not term.cfg.use_default_offset:
-        return _per_joint(term._offset, len(term._joint_names))
-    asset = term._asset
-    pose = [0.0] * asset.num_joints
-    indices, _, values = resolve_matching_names_values(asset.cfg.init_state.joint_pos, asset.joint_names)
-    for index, value in zip(indices, values):
-        pose[index] = float(value)
-    joint_ids = range(asset.num_joints) if isinstance(term._joint_ids, slice) else term._joint_ids
-    return [pose[int(i)] for i in joint_ids]
-
-
-def gather_deploy_metadata(
-    env, policy, run_dir: str, raw_action_clip: float | None, actor_code: str, log
-) -> dict[str, str] | None:
-    """Resolve the deployment contract from the live environment, or None (with a message) if an action term
-    is not a joint position action and the contract cannot describe it. ``raw_action_clip`` is the run's
-    ``clip_actions``, which rsl_rl's environment wrapper applies to the raw actions. ``actor_code`` is whether the
-    network's code matches the run's (``actor_code_differences``)."""
-    from isaaclab.envs.mdp.actions import JointPositionAction
-
-    manager = getattr(env.unwrapped, "action_manager", None)
-    if manager is None:
-        log("[WARNING] The environment has no action manager (direct workflow); not attaching deploy metadata.")
-        return None
-    joint_names, scale, offset, clip, stiffness, damping = [], [], [], [], [], []
-    clipped = False
-    for name in manager.active_terms:
-        term = manager.get_term(name)
-        # Velocity, effort and relative position actions turn actions into something other than position targets.
-        if not isinstance(term, JointPositionAction):
-            log(
-                f"[WARNING] Action term {name} ({type(term).__name__}) is not a joint position action; not attaching"
-                " deploy metadata."
-            )
-            return None
-        names = term._joint_names
-        joint_names += list(names)
-        scale += _per_joint(term._scale, len(names))
-        offset += _configured_offset(term)
-        # The configured gains, not the simulated ones, which startup randomization events can perturb.
-        stiffness += [float(v) for v in term._asset.data.default_joint_stiffness[0, term._joint_ids]]
-        damping += [float(v) for v in term._asset.data.default_joint_damping[0, term._joint_ids]]
-        if term.cfg.clip is None:
-            clip += [[None, None]] * len(names)
+    # The settings name joints by pattern; the robot model decides which joints they match, in which order, and with
+    # which gains. The check of policy.onnx against the checkpoint can't see a change here: both run in this
+    # environment.
+    io = resolve_policy_io(env.unwrapped, agent)
+    recorded_io = (read_code_state(run_dir) or {}).get("policy_io")
+    robot_model, robot_change = robot_model_check(run_dir, env_cfg)
+    io_changes = policy_io_differences(recorded_io, io) if recorded_io else []
+    if io_changes:
+        log("[ERROR] The joints and gains the policy's inputs and outputs resolve to changed since training:")
+        for line in io_changes:
+            log(f"    {line}")
+        if robot_change:
+            log(f"  The robot model changed: {robot_change}")
+        log("  The policy settings match the run's, so the robot model the current code loads resolves them")
+        log("  differently: the exported policy would drive the wrong joints or gains. Never exported, also without")
+        log(f"  --strict. Load the robot model the run was trained with. {check_out_hint(run_dir)}")
+        env.close()
+        sys.exit(1)
+    if recorded_io:
+        log("[INFO] Checked the joints and gains the policy resolves to against the run's: they match.")
+    if robot_model == ROBOT_MODEL_CHANGED:
+        log(f"[WARNING] The robot model changed since training: {robot_change}")
+        if recorded_io:
+            log("  The joints and gains the policy uses still match the run's, but the simulated robot doesn't.")
         else:
-            clipped = True
-            # None for an unclipped side: the resolver fills joints the config does not name with +-inf.
-            clip += [[None if abs(side) == float("inf") else side for side in pair] for pair in term._clip[0].tolist()]
-    observations = env.unwrapped.observation_manager.active_terms
-    groups = [group for group in policy.obs_groups if group in observations]
-    observation_names = [
-        name if len(groups) == 1 else f"{group}/{name}" for group in groups for name in observations[group]
-    ]
-    return deploy_metadata(
-        joint_names=joint_names,
-        raw_action_clip=raw_action_clip,
-        action_scale=scale,
-        action_offset=offset,
-        action_clip=clip if clipped else None,
-        joint_stiffness=stiffness,
-        joint_damping=damping,
-        sim_dt=env.unwrapped.physics_dt,
-        decimation=env.unwrapped.cfg.decimation,
-        observation_names=observation_names,
-        trained_commit=training_commit(run_dir),
-        robot_model=training_robot_model(run_dir),
-        trained_outside_cyclotron=trained_outside_cyclotron(run_dir),
-        actor_code=actor_code,
-    )
+            log("  The run records no joints and gains (it was trained before training recorded them), so whether the")
+            log("  policy's actions still reach the same joints can't be checked.")
+        if args_cli.strict:
+            log("[ERROR] Stopped by --strict: the robot model changed since training (see above).")
+            env.close()
+            sys.exit(1)
+    elif robot_model == ROBOT_MODEL_UNCHECKED and not recorded_io:
+        log(
+            "[INFO] The run records neither its robot model's sha256 nor the joints and gains the policy resolved to,"
+            " so which joints the policy's actions reach can't be checked against training."
+        )
+    return io, robot_model
 
 
 def main():
@@ -321,12 +300,17 @@ def main():
             f"[WARNING] {run_dir}/params/{' and '.join(generated)} was written from the code by an earlier --export,"
             " not by training."
         )
-    if trained_outside_cyclotron(run_dir):
+    if code_state_missing(run_dir):
         log(
             f"[WARNING] The run has no {CODE_STATE_FILE}, so it was trained outside cyclotron (or before cyclotron"
             " recorded one), and nothing can check this export against the code it was trained with. Export from the"
             " same codebase and commit the policy was trained with, as far as possible. The exported policy is tagged"
-            " as trained outside cyclotron."
+            " code_state_missing."
+        )
+    elif "error" in (code_state := read_code_state(run_dir)):
+        log(
+            f"[WARNING] Training couldn't record the code in {CODE_STATE_FILE} ({code_state['error']}),"
+            " so only the env.yaml and agent.yaml hashes can be checked against it."
         )
 
     problems = restore_policy_settings(env_cfg, agent_cfg, *load_run_configs(run_dir))
@@ -346,14 +330,14 @@ def main():
     # Written and compared where train.py saves params/: after the environment is created, which resolves parts of
     # the config.
     env_dict, agent_dict = class_to_dict(env_cfg), class_to_dict(agent_cfg)
-    for name, cfg in zip(RUN_CONFIGS, (env_cfg, agent_cfg)):
-        if name in not_saved:
-            path = os.path.join(run_dir, "params", name)
-            os.makedirs(os.path.dirname(path), exist_ok=True)
-            dump_yaml(path, cfg)
-            mark_generated(path, current_code(), datetime.now().strftime("%Y-%m-%d %H:%M"))
-            log(f"[WARNING] Wrote {path} from the current code, marked as generated.")
-    saved_configs = load_run_configs(run_dir)
+    # Kept here and written into params/ only once the export succeeds, so a stopped export leaves the run as it was.
+    generated_now = {
+        name: generated_config(cfg) for name, cfg in zip(RUN_CONFIGS, (env_cfg, agent_cfg)) if name in not_saved
+    }
+    saved_configs = tuple(
+        load_config(generated_now[name]) if name in generated_now else config
+        for name, config in zip(RUN_CONFIGS, load_run_configs(run_dir))
+    )
     mismatches, new = rebuild_differences(saved_configs, env_dict, agent_dict)
     if mismatches:
         log("[ERROR] The rebuilt policy settings don't match the run's env.yaml and agent.yaml:")
@@ -364,6 +348,7 @@ def main():
         env.close()
         sys.exit(1)
     log("[INFO] Checked the rebuilt policy settings against the run's env.yaml and agent.yaml: they match.")
+    io, robot_model = check_policy_io(env, run_dir, env_dict, agent_dict, log)
     if new:
         log("[WARNING] The current code has policy settings the run didn't save; they keep the current code's value:")
         for line in new:
@@ -393,7 +378,7 @@ def main():
             log("[ERROR] Stopped by --strict: the code of the policy's network changed since training (see above).")
             env.close()
             sys.exit(1)
-    elif actor_code == ACTOR_CODE_UNRECORDED and not trained_outside_cyclotron(run_dir):
+    elif actor_code == ACTOR_CODE_UNRECORDED and not code_state_missing(run_dir):
         # A run without code_state.yaml was warned about above; this one has it but recorded no network code.
         log(
             f"[WARNING] The run's {CODE_STATE_FILE} records no network code (it was trained before training recorded"
@@ -412,7 +397,10 @@ def main():
         raise ValueError(f"Unsupported runner class: {agent_cfg.class_name}")
     try:
         load_policy(
-            runner, handle_deprecated_rsl_rl_checkpoint(checkpoint, installed_version), agent_cfg.class_name, run_dir
+            runner,
+            handle_deprecated_rsl_rl_checkpoint(checkpoint, installed_version),
+            agent_cfg.class_name,
+            check_out_hint(run_dir),
         )
     except ValueError as error:
         log(f"[ERROR] {error}")
@@ -428,29 +416,53 @@ def main():
         runner.export_policy_to_onnx(path=staging, filename="policy.onnx")
         runner.export_policy_to_jit(path=staging, filename="policy.pt")
         missing = copy_run_yamls(run_dir, staging)
+        for name, text in generated_now.items():
+            with open(os.path.join(staging, name), "w") as f:
+                f.write(text)
+        missing = [name for name in missing if name not in generated_now]
         for name in missing:
             log(f"[WARNING] {run_dir}/params/{name} not found; the viewer and --share need it next to policy.onnx.")
 
-        deploy = gather_deploy_metadata(env, policy, run_dir, agent_cfg.clip_actions, actor_code, log)
-        if deploy is not None:
+        unwrapped = env.unwrapped
+        deploy = deploy_metadata_from_io(
+            io, agent_cfg.clip_actions, unwrapped.physics_dt, unwrapped.cfg.decimation, run_dir, actor_code, robot_model
+        )
+        if deploy is None:
+            log(f"[WARNING] {io['unsupported']} Not attaching deploy metadata.")
+        else:
             attach_deploy_metadata(onnx_path, deploy)
             log(f"[INFO] Attached deploy metadata to policy.onnx: {', '.join(deploy)}, obs_dim, action_dim.")
 
-        difference = max_onnx_difference(policy, env.get_observations(), onnx_path)
+        # rsl_rl writes each file with its own exporter, so each is checked.
+        obs = env.get_observations()
+        differences = {
+            "policy.onnx": max_onnx_difference(policy, obs, onnx_path),
+            "policy.pt": max_jit_difference(policy, obs, os.path.join(staging, "policy.pt")),
+        }
         checked = f"actions and memory over {RECURRENT_STEPS} steps" if policy.is_recurrent else "actions"
         env.close()
         # Isaac Sim replaces sys.exit with a version that only takes an exit code, so the message is printed first.
-        if difference > ONNX_TOLERANCE:
+        wrong = {name: difference for name, difference in differences.items() if difference > EXPORT_TOLERANCE}
+        if wrong:
             shutil.rmtree(staging)
-            log(
-                "[ERROR] policy.onnx gives different actions than the checkpoint"
-                f" (max difference {difference:.2e}; checked {checked}). Nothing was written to {output_dir}."
-            )
+            for name, difference in wrong.items():
+                log(
+                    f"[ERROR] {name} gives different actions than the checkpoint"
+                    f" (max difference {difference:.2e}; checked {checked})."
+                )
+            log(f"[ERROR] Nothing was written to {output_dir}.")
             sys.exit(1)
         replace_export(staging, output_dir)
     finally:
         shutil.rmtree(staging, ignore_errors=True)
-    log(f"[INFO] Checked policy.onnx against the checkpoint ({checked}): max difference {difference:.1e}.")
+    for name, text in generated_now.items():
+        path = os.path.join(run_dir, "params", name)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as f:
+            f.write(text)
+        log(f"[WARNING] Wrote {path} from the current code, marked as generated.")
+    for name, difference in differences.items():
+        log(f"[INFO] Checked {name} against the checkpoint ({checked}): max difference {difference:.1e}.")
 
     log(f"[INFO] Exported {os.path.basename(checkpoint)} to: {output_dir}")
     for name in ("policy.onnx", "policy.pt", *BUNDLE_YAMLS, *OPTIONAL_BUNDLE_YAMLS):
@@ -463,8 +475,17 @@ def main():
         log("[WARNING] The current code has policy settings the run didn't save; see the warning before the export.")
     if actor_code == ACTOR_CODE_CHANGED:
         log("[WARNING] The code of the policy's network changed since training; see the warning before the export.")
+    if robot_model == ROBOT_MODEL_CHANGED:
+        log("[WARNING] The robot model changed since training; see the warning before the export.")
 
 
 if __name__ == "__main__":
-    main()
-    simulation_app.close()
+    # close() ends the process with the status of a sys.exit in flight, and with 0 otherwise, so an unexpected error
+    # is turned into sys.exit(1) first: --share trusts this status before uploading.
+    try:
+        main()
+    except Exception:
+        traceback.print_exc()
+        sys.exit(1)
+    finally:
+        simulation_app.close()

@@ -9,13 +9,16 @@ from rsl_rl.models import MLPModel, RNNModel
 from rsl_rl.runners import OnPolicyRunner
 from tensordict import TensorDict
 
+from cyclotron import onnx_export
 from cyclotron.hub import checkpoints, infer_task
 from cyclotron.onnx_export import (
     attach_deploy_metadata,
     copy_run_yamls,
     deploy_metadata,
+    deploy_metadata_from_io,
     existing_export_note,
     export_log,
+    max_jit_difference,
     max_onnx_difference,
     replace_export,
 )
@@ -78,6 +81,12 @@ def export(policy: MLPModel, path) -> str:
     runner = SimpleNamespace(alg=SimpleNamespace(get_policy=lambda: policy))
     OnPolicyRunner.export_policy_to_onnx(runner, path=str(path), filename="policy.onnx")
     return os.path.join(path, "policy.onnx")
+
+
+def export_jit(policy: MLPModel, path) -> str:
+    runner = SimpleNamespace(alg=SimpleNamespace(get_policy=lambda: policy))
+    OnPolicyRunner.export_policy_to_jit(runner, path=str(path), filename="policy.pt")
+    return os.path.join(path, "policy.pt")
 
 
 @pytest.fixture
@@ -153,6 +162,32 @@ def test_recurrent_onnx_with_wrong_memory_weights_is_caught(tmp_path, trained):
     assert max_onnx_difference(policy, obs, export(broken, tmp_path)) > 1e-3
 
 
+def test_exported_jit_matches_policy_and_a_wrong_one_is_caught(tmp_path, trained):
+    policy, obs = trained
+    assert max_jit_difference(policy, obs, export_jit(policy, tmp_path / "good")) < 1e-5
+    unnormalized = make_policy(obs, obs_normalization=False)
+    unnormalized.mlp.load_state_dict(policy.mlp.state_dict())
+    unnormalized.distribution.load_state_dict(policy.distribution.state_dict())
+    assert max_jit_difference(policy, obs, export_jit(unnormalized, tmp_path / "unnormalized")) > 1e-2
+    with torch.no_grad():
+        next(unnormalized.mlp.parameters()).fill_(float("nan"))
+    assert max_jit_difference(policy, obs, export_jit(unnormalized, tmp_path / "nan")) == float("inf")
+
+
+@pytest.mark.parametrize("rnn_type", ["lstm", "gru"])
+def test_exported_recurrent_jit_matches_policy_over_steps_and_wrong_memory_weights_are_caught(
+    tmp_path, trained, rnn_type
+):
+    _, obs = trained
+    policy = make_recurrent_policy(obs, rnn_type)
+    assert max_jit_difference(policy, obs, export_jit(policy, tmp_path / "good")) < 1e-5
+    assert policy.get_hidden_state() is None
+    broken = make_recurrent_policy(obs, rnn_type)
+    with torch.no_grad():
+        broken.rnn.rnn.weight_hh_l0.mul_(-1.0)
+    assert max_jit_difference(policy, obs, export_jit(broken, tmp_path / "broken")) > 1e-3
+
+
 def sample_metadata(**overrides):
     values = dict(
         joint_names=["hip", "knee", "ankle", "toe"],
@@ -213,9 +248,6 @@ def test_deploy_metadata_names_the_robot_model_the_run_was_trained_with():
     assert read["robot_model_name"] == "asimov_1" and read["robot_model_sha256"] == "abc"
     assert read["robot_model_urdf_filepath"] == "asimov_1.urdf"
     assert not {"robot_model_repo", "robot_model_commit", "robot_model_dirty"} & set(read)
-    # A run trained before urdf_filepath was recorded names its urdf as file.
-    old = sample_metadata(robot_model={"file": "asimov_1.urdf", "sha256": "abc", "commit": "732cc60"})
-    assert old["robot_model_urdf_filepath"] == "asimov_1.urdf"
     assert not any(key.startswith("robot_model") for key in sample_metadata())
 
 
@@ -225,9 +257,60 @@ def test_deploy_metadata_says_whether_the_network_code_matched_the_run():
     assert sample_metadata(actor_code="unrecorded")["actor_code"] == "unrecorded"
 
 
-def test_deploy_metadata_tags_a_policy_trained_outside_cyclotron():
-    assert "trained_outside_cyclotron" not in sample_metadata()
-    assert sample_metadata(trained_outside_cyclotron=True)["trained_outside_cyclotron"] == "true"
+def test_deploy_metadata_tags_a_policy_without_code_state():
+    assert "code_state_missing" not in sample_metadata()
+    assert sample_metadata(code_state_missing=True)["code_state_missing"] == "true"
+
+
+def test_deploy_metadata_says_whether_the_robot_model_matched_the_run():
+    assert "robot_model_check" not in sample_metadata()
+    for status in ("matched", "changed", "unchecked"):
+        assert sample_metadata(robot_model_check=status)["robot_model_check"] == status
+
+
+def test_the_gap_is_absolute_below_1_relative_above_and_infinite_for_nan():
+    import numpy as np
+
+    gap = onnx_export._largest_gap
+    assert gap(np.array([0.5]), np.array([0.5 + 5e-5])) == pytest.approx(5e-5)
+    # float32 rounding of an action of 300 is ~3e-5 per step: relative, it stays far below the tolerance.
+    assert gap(np.array([300.0]), np.array([300.003])) == pytest.approx(1e-5)
+    assert gap(np.array([300.0]), np.array([303.0])) == pytest.approx(1e-2)
+    assert gap(np.array([0.5]), np.array([np.nan])) == float("inf")
+
+
+def test_deploy_metadata_from_io_keeps_each_per_joint_value_in_its_own_key(tmp_path):
+    import json
+
+    # Every per-joint list differs from the others, so a swap of any two (e.g. scale and offset) shows.
+    io = {
+        "actions": {
+            "joint_names": ["hip", "knee"],
+            "scale": [0.25, 0.5],
+            "offset": [0.1, -0.4],
+            "clip": [[-1.0, 1.0], [None, None]],
+            "stiffness": [100.0, 40.0],
+            "damping": [5.0, 2.0],
+        },
+        "observations": {"policy": {"base_ang_vel": {}, "joint_pos": {"joints": ["hip", "knee"]}}},
+    }
+    run_dir = make_run(tmp_path)
+    metadata = deploy_metadata_from_io(io, 3.0, 0.005, 4, run_dir, "unchanged", "matched")
+    for key, field in (
+        ("joint_names", "joint_names"),
+        ("action_scale", "scale"),
+        ("action_offset", "offset"),
+        ("action_clip", "clip"),
+        ("joint_stiffness", "stiffness"),
+        ("joint_damping", "damping"),
+    ):
+        assert json.loads(metadata[key]) == io["actions"][field], key
+    assert json.loads(metadata["observation_names"]) == ["base_ang_vel", "joint_pos"]
+    assert metadata["raw_action_clip"] == "3.0" and metadata["decimation"] == "4" and metadata["sim_dt"] == "0.005"
+    assert metadata["code_state_missing"] == "true"
+    assert metadata["actor_code"] == "unchanged" and metadata["robot_model_check"] == "matched"
+    unsupported = {"actions": None, "unsupported": "Not joint positions.", "observations": io["observations"]}
+    assert deploy_metadata_from_io(unsupported, None, 0.005, 4, run_dir, None, None) is None
 
 
 def test_deploy_metadata_attach_replaces_earlier_values(tmp_path, trained):
@@ -287,10 +370,13 @@ def test_replace_export_moves_a_checked_export_over_the_previous_one(tmp_path):
     staging.mkdir(parents=True)
     (exported / "policy.onnx").write_text("old")
     (exported / "export.log").write_text("history\n")
+    (exported / "notes.txt").write_text("mine")
+    # The previous export was of a run with a code_state.yaml; this one's run has none.
+    (exported / "code_state.yaml").write_text("cyclotron: {}\n")
     (staging / "policy.onnx").write_text("new")
     (staging / "env.yaml").write_text("decimation: 4\n")
     replace_export(str(staging), str(exported))
-    assert sorted(os.listdir(exported)) == ["env.yaml", "export.log", "policy.onnx"]
+    assert sorted(os.listdir(exported)) == ["env.yaml", "export.log", "notes.txt", "policy.onnx"]
     assert (exported / "policy.onnx").read_text() == "new" and (exported / "export.log").read_text() == "history\n"
 
 

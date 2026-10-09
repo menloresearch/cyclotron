@@ -90,7 +90,7 @@ where `<run>` is a timestamp plus the run name:
 | --- | --- |
 | `model_<n>.pt` | Checkpoints, written every `save_interval` iterations (500 for the stock tasks) and at the end. |
 | `params/env.yaml`, `params/agent.yaml` | The task and training settings the run actually used, overrides included. |
-| `params/code_state.yaml` | Hashes of the code the run was trained with; what [`--export` and `--play` compare against](../README.md#code-changes-since-training). Also the sha256 of `env.yaml` and `agent.yaml`, so `--export` and `--share` refuse them once edited. |
+| `params/code_state.yaml` | What the run was trained with: the commit, the robot model's sha256, a hash of the network's code, and the joints and gains the policy's inputs and outputs resolved to; what [`--export` and `--play` compare against](../README.md#code-changes-since-training). Also the sha256 of `env.yaml` and `agent.yaml`, so `--export` and `--share` refuse them once edited. |
 | `git/` | rsl_rl's own records: the repo's commit and diff at training time. |
 | `events.out.tfevents.*` | Tensorboard event files. Watch them with `tensorboard --logdir logs/rsl_rl/<experiment_name>`. |
 

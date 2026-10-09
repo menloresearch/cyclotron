@@ -4,14 +4,20 @@ import math
 from dataclasses import dataclass, field
 from types import SimpleNamespace
 
-from cyclotron.code_state import load_run_configs
+from config_samples import dump, make_agent, make_env, term
+
 from cyclotron.run_config import (
     GENERATED_HEADER,
     generated_run_configs,
+    interface_differences,
+    load_config,
+    load_run_configs,
     mark_generated,
     missing_run_configs,
+    normalize_config,
+    policy_interface,
+    rebuild_differences,
     restore_policy_settings,
-    trained_outside_cyclotron,
 )
 
 # Plain dataclasses shaped like the Isaac Lab and rsl_rl configs export restores. Like Isaac Lab's configclass, some
@@ -203,14 +209,6 @@ def test_load_run_configs_rebuilds_tuples_and_slices_but_no_other_python_objects
     )
 
 
-def test_a_run_without_code_state_was_trained_outside_cyclotron(tmp_path):
-    params = tmp_path / "params"
-    params.mkdir()
-    assert trained_outside_cyclotron(str(tmp_path))
-    (params / "code_state.yaml").write_text("commit: 32aef5c5ec11\n")
-    assert not trained_outside_cyclotron(str(tmp_path))
-
-
 def test_generated_run_configs_are_found_by_their_first_line(tmp_path):
     params = tmp_path / "params"
     params.mkdir()
@@ -223,3 +221,113 @@ def test_generated_run_configs_are_found_by_their_first_line(tmp_path):
     assert (params / "agent.yaml").read_text().startswith(f"{GENERATED_HEADER} (main @ 1234567) on 2026-10-07 12:00:")
     # The header is a yaml comment, so the file still loads as before.
     assert load_run_configs(str(tmp_path)) == ({"decimation": 4}, {"seed": 42})
+
+
+def differences(env: dict, agent: dict | None = None) -> tuple[list[str], list[str]]:
+    """Compare a changed config with the one a run saved, as export and play do."""
+    saved = load_config(dump(make_env())), load_config(dump(make_agent()))
+    current = normalize_config(env), normalize_config(agent or make_agent())
+    return interface_differences(policy_interface(*saved), policy_interface(*current))
+
+
+def test_saved_yaml_with_python_tags_reads_like_the_current_config():
+    text = dump(make_env())
+    assert "!!python/tuple" in text and "builtins.slice" in text
+    assert differences(make_env()) == ([], [])
+    saved = load_config(text)
+    assert saved["sim"]["gravity"] == (0.0, 0.0, -9.81)
+    assert saved["observations"]["policy"]["joint_pos_slot01"]["params"]["asset_cfg"]["joint_ids"] == slice(None)
+
+
+def test_changes_to_what_the_policy_sees_and_does_are_named_as_overrides():
+    env, agent = make_env(), make_agent()
+    env["observations"]["policy"]["base_ang_vel"]["scale"] = 0.5
+    env["observations"]["policy"]["base_ang_vel"]["params"]["max_lag"] = 2
+    env["actions"]["joint_pos"]["joint_names"].reverse()
+    env["scene"]["robot"]["actuators"]["hip_pitch"]["stiffness"] = 200.0
+    env["decimation"] = 2
+    agent["actor"]["hidden_dims"] = [256, 128]
+    agent["clip_actions"] = 1.0
+    # Settings only the current config has come last.
+    assert differences(env, agent) == (
+        [],
+        [
+            "env.observations.policy.base_ang_vel.scale: 0.25 -> 0.5",
+            "env.actions.joint_pos.joint_names: same entries in a different order",
+            "env.scene.robot.actuators.hip_pitch.stiffness: 150.0 -> 200.0",
+            "env.decimation: 4 -> 2",
+            "agent.actor.hidden_dims: [512, 256, 128] -> [256, 128]",
+            "agent.clip_actions: none -> 1.0",
+            "env.observations.policy.base_ang_vel.params.max_lag: none -> 2",
+        ],
+    )
+
+
+def test_a_network_change_that_keeps_the_weight_shapes_is_an_error():
+    agent = make_agent()
+    agent["actor"]["activation"] = "relu"
+    assert differences(make_env(), agent) == (["agent.actor.activation: elu -> relu"], [])
+
+
+def test_added_removed_and_reordered_terms_are_reported_once():
+    env = make_env()
+    policy = env["observations"]["policy"]
+    policy["foot_height"] = term("cyclotron.tasks.locomotion.mdp.observations:foot_height")
+    del policy["actions"]
+    assert differences(env) == (
+        [],
+        [
+            "env.observations.policy: term actions removed",
+            "env.observations.policy: term foot_height added",
+        ],
+    )
+    reordered = make_env()
+    reordered["observations"]["policy"] = dict(reversed(list(reordered["observations"]["policy"].items())))
+    assert differences(reordered) == (
+        [],
+        [
+            "env.observations.policy: terms reordered, base_ang_vel, joint_pos_slot01, actions"
+            " -> actions, joint_pos_slot01, base_ang_vel"
+        ],
+    )
+
+
+def test_training_only_and_play_changes_are_ignored():
+    env, agent = make_env(), make_agent()
+    # The experiment branches' privileged critic input, and what the play tasks change.
+    env["observations"]["critic"]["path_error"] = term("cyclotron.tasks.locomotion.mdp.drift:path_error")
+    env["observations"]["policy"]["enable_corruption"] = False
+    for name in ("base_ang_vel", "joint_pos_slot01", "actions"):
+        env["observations"]["policy"][name]["noise"] = None
+    env["commands"]["twist"]["ranges"]["lin_vel_x"] = (0.6, 0.8)
+    env["events"]["push_robot"] = None
+    env["actions"]["joint_pos"]["debug_vis"] = True
+    env["scene"]["num_envs"] = 1
+    env["seed"] = 7
+    agent["critic"]["hidden_dims"] = [1024]
+    agent["actor"]["distribution_cfg"]["init_std"] = 0.5
+    assert differences(env, agent) == ([], [])
+
+
+def test_renamed_modules_and_new_unset_fields_are_not_changes():
+    env = make_env()
+    env["observations"]["policy"]["base_ang_vel"]["func"] = "isaac_asimov.tasks.locomotion.mdp.observations:delayed_obs"
+    env["actions"]["joint_pos"]["clip"] = None  # a field a newer Isaac Lab adds, unset
+    assert differences(env) == ([], [])
+
+
+def test_rebuild_differences_flags_values_unlike_the_run_and_lists_settings_it_did_not_save(tmp_path):
+    params = tmp_path / "params"
+    params.mkdir()
+    (params / "env.yaml").write_text(dump(make_env()))
+    (params / "agent.yaml").write_text(dump(make_agent()))
+    assert rebuild_differences(load_run_configs(str(tmp_path)), make_env(), make_agent()) == ([], [])
+
+    env, agent = make_env(), make_agent()
+    env["actions"]["joint_pos"]["scale"] = 0.5
+    env["actions"]["joint_pos"]["clip"] = {".*": (-1.0, 1.0)}  # a setting added to the code since training
+    agent["actor"]["activation"] = "relu"
+    assert rebuild_differences(load_run_configs(str(tmp_path)), env, agent) == (
+        ["env.actions.joint_pos.scale: 0.25 -> 0.5", "agent.actor.activation: elu -> relu"],
+        ["env.actions.joint_pos.clip[.*]: none -> [-1.0, 1.0]"],
+    )

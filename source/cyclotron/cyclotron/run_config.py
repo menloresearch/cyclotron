@@ -1,12 +1,16 @@
-"""Set a run's policy settings back to the values its ``env.yaml`` and ``agent.yaml`` saved, for ``--export``.
+"""A run's ``env.yaml`` and ``agent.yaml``: reading them, the policy settings in them, and setting those back for
+``--export``.
+
+Isaac Lab saves both configs into the run's ``params/`` at train time. The settings that decide what the policy sees
+and does (``policy_interface``: the actor's observations, the actions, the default pose, the actuators, the timing and
+the actor network) are compared with the current code before ``--export`` and ``--play`` use the run, so a changed
+observation, action or network is reported instead of crashing or silently changing what the policy sees.
 
 Export builds the environment from the task's config in the current code, which may have changed since the run was
-trained. Before the environment is built, the settings that decide what the policy sees and does (the ones
-``code_state.policy_interface`` compares: the actor's observations, the actions, the default pose, the actuators,
-the timing and the actor network) are set back to the run's saved values, so the exported policy and its deploy
-metadata describe the run as it was trained. Everything else (rewards, terrain, events, commands, the robot model
-file) only shapes training or depends on the machine, and stays as the code has it. Nothing is overridden on top:
-the run's files are the only source of these settings.
+trained. Before the environment is built, these settings are set back to the run's saved values, so the exported
+policy and its deploy metadata describe the run as it was trained. Everything else (rewards, terrain, events,
+commands, the robot model file) only shapes training or depends on the machine, and stays as the code has it. Nothing
+is overridden on top: the run's files are the only source of these settings.
 
 A run without these files can have them written from the current code, marked as generated, so a policy is always
 exported with both.
@@ -20,8 +24,208 @@ import dataclasses
 import importlib
 import os
 import re
+from collections import Counter
 
-from cyclotron.code_state import _FUNCTION, _IGNORED_KEYS, CODE_STATE_FILE, RUN_CONFIGS, lookup, policy_sections
+import yaml
+
+# -- Reading the configs Isaac Lab saves ------------------------------------------------------------------------
+
+RUN_CONFIGS = ("env.yaml", "agent.yaml")
+
+
+class _ConfigLoader(yaml.SafeLoader):
+    """Reads the yaml Isaac Lab's ``dump_yaml`` writes: tuples and slices are rebuilt; any other Python object is
+    never constructed, since a run can come from another machine, and reads as its tag (``!!python/...``)."""
+
+
+_ConfigLoader.add_constructor(
+    "tag:yaml.org,2002:python/tuple", lambda loader, node: tuple(loader.construct_sequence(node, deep=True))
+)
+_ConfigLoader.add_constructor(
+    "tag:yaml.org,2002:python/object/apply:builtins.slice",
+    lambda loader, node: slice(*loader.construct_sequence(node, deep=True)),
+)
+_ConfigLoader.add_multi_constructor("tag:yaml.org,2002:python/", lambda loader, suffix, node: f"!!python/{suffix}")
+
+
+def load_config(text: str) -> dict:
+    return yaml.load(text, Loader=_ConfigLoader) or {}
+
+
+def load_run_configs(run_dir: str) -> tuple[dict, dict]:
+    """The run's saved ``params/env.yaml`` and ``params/agent.yaml``; an empty dict for a file it doesn't have."""
+    configs = []
+    for name in RUN_CONFIGS:
+        path = os.path.join(run_dir, "params", name)
+        if os.path.isfile(path):
+            with open(path) as f:
+                configs.append(load_config(f.read()))
+        else:
+            configs.append({})
+    return configs[0], configs[1]
+
+
+def normalize_config(config: dict) -> dict:
+    """Pass a config from ``class_to_dict`` through the same dump as ``dump_yaml``, so it reads like a saved one."""
+    return load_config(yaml.dump(config, default_flow_style=False, sort_keys=False))
+
+
+# -- What the policy sees and does -------------------------------------------------------------------------------
+
+# Settings inside the compared sections that only shape training, or that the play tasks change on purpose.
+_IGNORED_KEYS = frozenset({"noise", "enable_corruption", "debug_vis", "init_std"})
+# Changes that keep every weight's shape but make the same weights compute something else.
+_NETWORK_KEYS = re.compile(r"agent\.(actor|student)\.(class_name|activation|rnn_type)")
+# A function or class as Isaac Lab writes it, "module.path:name".
+_FUNCTION = re.compile(r"([A-Za-z_][\w.]*):([A-Za-z_]\w*)")
+
+
+def _short_names(value):
+    """Keep only the name of each ``module.path:name``, so moving or renaming a module isn't a change."""
+    if isinstance(value, str):
+        match = _FUNCTION.fullmatch(value)
+        return match.group(2) if match else value
+    if isinstance(value, dict):
+        return {key: _short_names(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return type(value)(_short_names(item) for item in value)
+    return value
+
+
+def _flatten(name: str, value, out: dict) -> None:
+    if isinstance(value, dict) and value:
+        for key, item in value.items():
+            if key not in _IGNORED_KEYS:
+                _flatten(f"{name}.{key}" if re.fullmatch(r"\w+", str(key)) else f"{name}[{key}]", item, out)
+    else:
+        out[name] = value
+
+
+def policy_sections(agent: dict) -> list[tuple[str, bool]]:
+    """Where the settings that decide what a run's policy sees and does live in its configs, as Hydra override paths
+    (``env.actions``), each with whether it holds terms (an observation group or the actions). ``agent`` is the
+    agent config as a dict; it names the actor's observation groups.
+
+    Critic and AMP inputs, rewards, events, terrain and command ranges only shape training, and the play tasks change
+    some of them, so they are left out. ``--export`` restores these sections from a run and compares them.
+    """
+    model = "student" if agent.get("class_name") == "DistillationRunner" else "actor"
+    groups = (agent.get("obs_groups") or {}).get(model) or ["policy"]
+    sections = [(f"env.observations.{group}", True) for group in groups] + [("env.actions", True)]
+    paths = ["env.scene.robot.init_state.joint_pos", "env.scene.robot.actuators", "env.sim.dt", "env.decimation"]
+    paths += [f"agent.obs_groups.{model}", f"agent.{model}", "agent.clip_actions"]
+    return sections + [(path, False) for path in paths]
+
+
+def lookup(configs: dict, path: str, default=None):
+    """The value at a dotted ``path`` such as ``env.sim.dt`` in ``{"env": ..., "agent": ...}``, or ``default``."""
+    value = configs
+    for key in path.split("."):
+        if not isinstance(value, dict) or key not in value:
+            return default
+        value = value[key]
+    return value
+
+
+def policy_interface(env: dict, agent: dict) -> dict:
+    """The settings that decide what a run's policy sees and does (``policy_sections``), as ``{dotted.name: value}``.
+
+    Names are Hydra override paths (``env.actions.joint_pos.scale``). ``env.observations.<group>`` holds the group's
+    term names in order. Observation noise is left out too: it only shapes training, and the play tasks turn it off.
+    """
+    configs = {"env": env, "agent": agent}
+    out = {}
+    for path, _ in policy_sections(agent):
+        value = lookup(configs, path)
+        _flatten(path, value, out)
+        if path.startswith("env.observations."):
+            out[path] = [name for name, term in (value or {}).items() if isinstance(term, dict) and "func" in term]
+    return _short_names(out)
+
+
+def _unset(value) -> bool:
+    return value is None or value == {} or value == [] or value == ()
+
+
+def _text(value) -> str:
+    if value is None:
+        return "none"
+    if isinstance(value, (list, tuple)):
+        return "[" + ", ".join(_text(item) for item in value) + "]"
+    return str(value)
+
+
+def _describe(old, new) -> str:
+    if isinstance(old, list) and isinstance(new, list):
+        before, after = Counter(map(repr, old)), Counter(map(repr, new))
+        if before == after:
+            return "same entries in a different order"
+        if len(old) + len(new) > 8:
+            removed = [item for item in old if repr(item) not in after]
+            added = [item for item in new if repr(item) not in before]
+            parts = [f"removed {_text(removed)}"] if removed else []
+            parts += [f"added {_text(added)}"] if added else []
+            return ", ".join(parts) or f"{_text(old)} -> {_text(new)}"
+    return f"{_text(old)} -> {_text(new)}"
+
+
+def _is_term_list(key: str) -> bool:
+    return key.startswith("env.observations.") and key.count(".") == 2
+
+
+def interface_differences(saved: dict, current: dict) -> tuple[list[str], list[str]]:
+    """Describe how the current policy settings differ from the ones a run saved, one line each.
+
+    Returns ``(errors, warnings)``: errors are network changes that keep every weight's shape (e.g. the
+    activation), so the checkpoint would load but compute something else.
+    """
+    errors, warnings = [], []
+    # Terms that were added or removed are reported once, not setting by setting.
+    skipped = []
+    keys = list(dict.fromkeys([*saved, *current]))
+    for key in filter(_is_term_list, keys):
+        before, after = saved.get(key) or [], current.get(key) or []
+        for name in before:
+            if name not in after:
+                warnings.append(f"{key}: term {name} removed")
+                skipped.append(f"{key}.{name}.")
+        for name in after:
+            if name not in before:
+                warnings.append(f"{key}: term {name} added")
+                skipped.append(f"{key}.{name}.")
+        if [name for name in before if name in after] != [name for name in after if name in before]:
+            warnings.append(f"{key}: terms reordered, {', '.join(before)} -> {', '.join(after)}")
+    for key in keys:
+        if _is_term_list(key) or key.startswith(tuple(skipped)):
+            continue
+        old, new = saved.get(key), current.get(key)
+        if old == new or (_unset(old) and _unset(new)):
+            continue
+        (errors if _NETWORK_KEYS.fullmatch(key) else warnings).append(f"{key}: {_describe(old, new)}")
+    return errors, warnings
+
+
+def rebuild_differences(saved: tuple[dict, dict], env_cfg: dict, agent_cfg: dict) -> tuple[list[str], list[str]]:
+    """Compare the policy settings ``--export`` rebuilt from a run's ``env.yaml`` and ``agent.yaml`` (``saved``, from
+    ``load_run_configs``) with the saved ones. Returns ``(mismatches, new)``, one line each: settings whose value
+    differs from the run's, which means the rebuild failed, and settings the run didn't save (added to the code
+    since), which keep the current code's value.
+
+    ``env_cfg`` and ``agent_cfg`` are the current configs as plain dicts (Isaac Lab's ``class_to_dict``), taken where
+    training saves them: after the environment is created.
+    """
+    before = policy_interface(*saved)
+    after = policy_interface(normalize_config(env_cfg), normalize_config(agent_cfg))
+    mismatches, new = [], []
+    for key in dict.fromkeys([*before, *after]):
+        old, value = before.get(key), after.get(key)
+        if old == value or (_unset(old) and _unset(value)):
+            continue
+        (mismatches if key in before else new).append(f"{key}: {_describe(old, value)}")
+    return mismatches, new
+
+
+# -- Setting a run's policy settings back for --export -----------------------------------------------------------
 
 # Marks a setting the run's yaml doesn't have, which then keeps the code's value.
 _MISSING = object()
@@ -33,15 +237,6 @@ GENERATED_HEADER = "# Generated by --export from the current code"
 def missing_run_configs(run_dir: str) -> list[str]:
     """Which of ``env.yaml`` and ``agent.yaml`` the run's ``params/`` doesn't have."""
     return [name for name in RUN_CONFIGS if not os.path.isfile(os.path.join(run_dir, "params", name))]
-
-
-def trained_outside_cyclotron(run_dir: str) -> bool:
-    """Whether the run has no ``code_state.yaml``, which cyclotron's training always writes into ``params/``.
-
-    Isaac Lab's own ``train.py`` doesn't, so this is true for a run from another codebase. It is also true for a
-    cyclotron run trained before training recorded one, which can't be told apart.
-    """
-    return not os.path.isfile(os.path.join(run_dir, "params", CODE_STATE_FILE))
 
 
 def generated_run_configs(run_dir: str) -> list[str]:
