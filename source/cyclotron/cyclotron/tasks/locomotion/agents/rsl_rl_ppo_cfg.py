@@ -10,7 +10,7 @@ from isaaclab.utils import configclass
 
 from isaaclab_rl.rsl_rl import RslRlMLPModelCfg, RslRlOnPolicyRunnerCfg, RslRlPpoAlgorithmCfg
 
-from isaac_asimov.assets.robots.asimov_1 import ASIMOV_1_JOINT_NAMES
+from cyclotron.assets.robots.asimov_1 import ASIMOV_1_JOINT_NAMES
 
 from ..amp_env_cfg import (
     ASIMOV_1_AMP_OBS_TERMS,
@@ -24,7 +24,7 @@ from ..motion_dataset import MotionDatasetCfg
 @configclass
 class AMPPPOAlgorithmCfg(RslRlPpoAlgorithmCfg):
 
-    class_name: str = "isaac_asimov.algorithms.amp_ppo:AMPPPO"
+    class_name: str = "cyclotron.algorithms.amp_ppo:AMPPPO"
 
     amp_data: MotionDatasetCfg = MISSING
 

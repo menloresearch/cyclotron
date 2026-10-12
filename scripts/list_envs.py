@@ -4,7 +4,7 @@ import argparse
 
 from isaaclab.app import AppLauncher
 
-parser = argparse.ArgumentParser(description="List Isaac Asimov environments.")
+parser = argparse.ArgumentParser(description="List Cyclotron environments.")
 parser.add_argument("--keyword", type=str, default=None, help="Optional task-name filter.")
 args_cli = parser.parse_args()
 
@@ -13,11 +13,11 @@ simulation_app = app_launcher.app
 
 import gymnasium as gym
 
-import isaac_asimov.tasks  # noqa: F401, E402
+import cyclotron.tasks  # noqa: F401, E402
 
 
 def main() -> None:
-    print("Available Isaac Asimov environments:", flush=True)
+    print("Available Cyclotron environments:", flush=True)
     for task_spec in sorted(gym.registry.values(), key=lambda spec: spec.id):
         if task_spec.id.startswith("Asimov1-") and (
             args_cli.keyword is None or args_cli.keyword in task_spec.id

@@ -22,7 +22,7 @@ from isaaclab.terrains import TerrainImporterCfg
 from isaaclab.utils import configclass
 from isaaclab.utils.noise import AdditiveUniformNoiseCfg as Unoise
 
-from isaac_asimov.assets.robots.asimov_1 import (
+from cyclotron.assets.robots.asimov_1 import (
     ASIMOV_1_ACTION_SCALE,
     ASIMOV_1_JOINT_NAMES,
     ASIMOV_1_DELAYED_CFG,

@@ -11,7 +11,7 @@ from isaaclab.managers import ObservationTermCfg as ObsTerm
 from isaaclab.managers import SceneEntityCfg
 from isaaclab.utils import configclass
 
-from isaac_asimov.assets.robots.asimov_1 import ASIMOV_1_JOINT_NAMES
+from cyclotron.assets.robots.asimov_1 import ASIMOV_1_JOINT_NAMES
 
 from . import mdp
 from .velocity_env_cfg import Asimov1VelocityEnvCfg, Asimov1VelocityEnvCfg_PLAY

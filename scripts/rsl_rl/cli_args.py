@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import random
 from typing import TYPE_CHECKING
 
@@ -21,7 +22,12 @@ def add_rsl_rl_args(parser: argparse.ArgumentParser):
     arg_group.add_argument("--run_name", type=str, default=None, help="Run name suffix to the log directory.")
     arg_group.add_argument("--resume", action="store_true", default=False, help="Whether to resume from a checkpoint.")
     arg_group.add_argument("--load_run", type=str, default=None, help="Name of the run folder to resume from.")
-    arg_group.add_argument("--checkpoint", type=str, default=None, help="Checkpoint file to resume from.")
+    arg_group.add_argument(
+        "--checkpoint",
+        type=str,
+        default=None,
+        help="Checkpoint to load: a full path to a .pt file, or a filename inside the --load_run folder.",
+    )
     arg_group.add_argument(
         "--logger", type=str, default=None, choices={"wandb", "tensorboard", "neptune"}, help="Logger module to use."
     )
@@ -36,6 +42,29 @@ def parse_rsl_rl_cfg(task_name: str, args_cli: argparse.Namespace) -> RslRlBaseR
     rslrl_cfg: RslRlBaseRunnerCfg = load_cfg_from_registry(task_name, "rsl_rl_cfg_entry_point")
     rslrl_cfg = update_rsl_rl_cfg(rslrl_cfg, args_cli)
     return rslrl_cfg
+
+
+def resolve_checkpoint(log_root_path: str, agent_cfg: RslRlBaseRunnerCfg, args_cli: argparse.Namespace) -> str:
+    """Resolve the checkpoint file to load.
+
+    A full path in ``--checkpoint`` is always used as-is. A bare filename is looked up inside the ``--load_run``
+    folder. Without ``--checkpoint``, the latest checkpoint of ``--load_run`` (or of the latest run) is used.
+    """
+    from isaaclab.utils.assets import retrieve_file_path
+
+    from isaaclab_tasks.utils import get_checkpoint_path
+
+    checkpoint = args_cli.checkpoint
+    if checkpoint and "://" in checkpoint:
+        return retrieve_file_path(checkpoint)
+    if checkpoint and os.sep in checkpoint:
+        return retrieve_file_path(os.path.abspath(os.path.expanduser(checkpoint)))
+    if checkpoint and args_cli.load_run is None:
+        raise ValueError(
+            f"--checkpoint '{checkpoint}' is not a path. Pass a full path to the .pt file, or add --load_run <run>"
+            " to pick it from that run folder."
+        )
+    return get_checkpoint_path(log_root_path, agent_cfg.load_run, agent_cfg.load_checkpoint)
 
 
 def update_rsl_rl_cfg(agent_cfg: RslRlBaseRunnerCfg, args_cli: argparse.Namespace):

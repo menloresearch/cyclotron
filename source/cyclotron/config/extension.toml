@@ -2,11 +2,11 @@
 version = "0.1.0"
 category = "isaaclab"
 readme = "README.md"
-title = "Isaac Asimov"
+title = "Cyclotron"
 author = "Menlo Research"
 maintainer = "Menlo Research"
 description = "Standalone Isaac Lab locomotion and AMP training environments for Asimov-1."
-repository = "https://github.com/menloresearch/isaac_asimov"
+repository = "https://github.com/menloresearch/cyclotron"
 keywords = ["extension", "isaaclab", "robotics", "reinforcement-learning", "amp"]
 
 [dependencies]
@@ -18,4 +18,4 @@ keywords = ["extension", "isaaclab", "robotics", "reinforcement-learning", "amp"
 reloadable = false
 
 [[python.module]]
-name = "isaac_asimov"
+name = "cyclotron"
