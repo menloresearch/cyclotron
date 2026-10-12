@@ -393,9 +393,14 @@ class AMPPPO(PPO):
     def _sync_discriminator_normalizer(self) -> None:
         if not self.discriminator.feature_normalization:
             return
-        state = [self.discriminator.feature_norm.state_dict()]
-        torch.distributed.broadcast_object_list(state, src=0)
-        self.discriminator.feature_norm.load_state_dict(state[0])
+        self._broadcast_module_state(self.discriminator.feature_norm)
+
+    @staticmethod
+    def _broadcast_module_state(module: nn.Module) -> None:
+        # State tensors share storage with the module. Direct broadcasts avoid
+        # serializing CUDA model state through an object collective.
+        for tensor in module.state_dict().values():
+            torch.distributed.broadcast(tensor, src=0)
 
     def reduce_parameters(self) -> None:
         params = list(self.actor.parameters())
@@ -416,10 +421,11 @@ class AMPPPO(PPO):
             offset += numel
 
     def broadcast_parameters(self) -> None:
-        super().broadcast_parameters()
-        disc_params = [self.discriminator.state_dict()]
-        torch.distributed.broadcast_object_list(disc_params, src=0)
-        self.discriminator.load_state_dict(disc_params[0])
+        self._broadcast_module_state(self.actor)
+        self._broadcast_module_state(self.critic)
+        if self.rnd:
+            self._broadcast_module_state(self.rnd.predictor)
+        self._broadcast_module_state(self.discriminator)
 
     def train_mode(self) -> None:
         super().train_mode()

@@ -141,14 +141,14 @@ class Asimov1SceneCfg(InteractiveSceneCfg):
 
 @configclass
 class CommandsCfg:
-    twist = mdp.UniformVelocityCommandCfg(
+    twist = mdp.HeadingHoldVelocityCommandCfg(
         asset_name="robot",
         resampling_time_range=(3.0, 8.0),
         rel_standing_envs=0.2,
-        rel_heading_envs=0.3,
+        rel_heading_envs=0.5,
         heading_command=True,
         heading_control_stiffness=0.5,
-        debug_vis=True,
+        debug_vis=False,
         ranges=mdp.UniformVelocityCommandCfg.Ranges(
             lin_vel_x=(-0.6, 0.8),
             lin_vel_y=(-0.5, 0.5),
@@ -167,7 +167,11 @@ class ActionsCfg:
         asset_name="robot",
         joint_names=list(ASIMOV_1_JOINT_NAMES),
         preserve_order=True,
-        scale=ASIMOV_1_ACTION_SCALE,
+        scale={
+            name: 0.08 if name.endswith("ankle_roll_joint") else ASIMOV_1_ACTION_SCALE
+            for name in ASIMOV_1_JOINT_NAMES
+        },
+        clip={".*_ankle_roll_joint": (-0.09, 0.09)},
         use_default_offset=True,
     )
 
@@ -381,6 +385,11 @@ class RewardsCfg:
         weight=3.0,
         params={"command_name": "twist", "std": 0.7071},
     )
+    heading_drift = RewTerm(
+        func=mdp.heading_drift,
+        weight=-0.5,
+        params={"command_name": "twist"},
+    )
     upright = RewTerm(
         func=mdp.flat_orientation,
         weight=1.0,
@@ -473,6 +482,15 @@ class RewardsCfg:
     )
     angular_momentum = RewTerm(func=mdp.angular_momentum_penalty, weight=-0.03)
     dof_pos_limits = RewTerm(func=mdp.joint_pos_limits, weight=-1.0)
+    ankle_roll_overuse = RewTerm(
+        func=mdp.ankle_roll_overuse,
+        weight=-0.5,
+        params={
+            "free_range": 0.06,
+            "joint_limit": 0.1,
+            "asset_cfg": SceneEntityCfg("robot", joint_names=[".*_ankle_roll_joint"]),
+        },
+    )
     soft_landing = RewTerm(
         func=mdp.soft_landing,
         weight=-1e-5,
@@ -561,7 +579,7 @@ class Asimov1VelocityEnvCfg_PLAY(Asimov1VelocityEnvCfg):
         self.events.reset_base.params["velocity_range"] = {
             k: (0.0, 0.0) for k in self.events.reset_base.params["velocity_range"]
         }
-        self.commands.twist.ranges.lin_vel_x = (0.6, 0.8)
+        self.commands.twist.ranges.lin_vel_x = (-0.6, 0.8)
         self.commands.twist.ranges.lin_vel_y = (-0.5, 0.5)
         self.commands.twist.ranges.ang_vel_z = (-0.6, 0.6)
         self.scene.terrain.terrain_generator = COBBLESTONE_ROAD_CFG.replace(

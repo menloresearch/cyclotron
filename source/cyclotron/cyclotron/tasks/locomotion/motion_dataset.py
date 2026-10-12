@@ -87,8 +87,19 @@ class MotionDataset:
             fps = np.asarray(data["fps"])
             if fps.size != 1:
                 raise ValueError(f"Expected scalar fps in {f}, got shape {fps.shape}")
-            fps_list.append(float(fps.item()))
-            traj_lengths.append(data["joint_pos"].shape[0])
+            # Combined archives retain clip boundaries so sampled transitions
+            # never jump from the end of one recording to the start of another.
+            lengths = np.asarray(data.get("clip_lengths", [data["joint_pos"].shape[0]]))
+            if (
+                lengths.ndim != 1
+                or lengths.size == 0
+                or not np.issubdtype(lengths.dtype, np.integer)
+                or np.any(lengths <= 0)
+                or int(lengths.sum()) != data["joint_pos"].shape[0]
+            ):
+                raise ValueError(f"Invalid clip_lengths in {f}: must partition the motion frames")
+            fps_list.extend([float(fps.item())] * len(lengths))
+            traj_lengths.extend(lengths.tolist())
 
             joint_pos = data["joint_pos"]
             joint_vel = data["joint_vel"]

@@ -67,6 +67,32 @@ def track_angular_velocity(
     return torch.exp(-(z_error + xy_error) / std**2)
 
 
+def heading_drift(
+    env: ManagerBasedRLEnv,
+    command_name: str,
+    asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
+) -> torch.Tensor:
+    """Penalize heading error while a moving heading-hold command is active."""
+    command = env.command_manager.get_term(command_name)
+    asset: Articulation = env.scene[asset_cfg.name]
+    active = command.is_heading_env & ~command.is_standing_env
+    error = math_utils.wrap_to_pi(command.heading_target - asset.data.heading_w)
+    return torch.square(error) * active.float()
+
+
+def ankle_roll_overuse(
+    env: ManagerBasedRLEnv,
+    free_range: float,
+    joint_limit: float,
+    asset_cfg: SceneEntityCfg,
+) -> torch.Tensor:
+    """Penalize ankle roll motion near the mechanical limit."""
+    asset: Articulation = env.scene[asset_cfg.name]
+    ankle_roll = asset.data.joint_pos[:, asset_cfg.joint_ids]
+    excess = torch.clamp(torch.abs(ankle_roll) - free_range, min=0.0)
+    return torch.sum(torch.square(excess / (joint_limit - free_range)), dim=1)
+
+
 def flat_orientation(
     env: ManagerBasedRLEnv,
     std: float,

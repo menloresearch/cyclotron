@@ -25,7 +25,7 @@ ASIMOV_1_AMP_OBS_TERMS = ["joint_pos", "joint_vel"]
 _MOTIONS_DIR = Path(__file__).resolve().parent / "motions"
 
 ASIMOV_1_MOTION_FILES = [
-    str(_MOTIONS_DIR / "policy_delay_walk_slow.npz"),
+    str(_MOTIONS_DIR / "asimov_1_walking.npz"),
 ]
 
 ASIMOV_1_KEY_BODY_NAMES = [
