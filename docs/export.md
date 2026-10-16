@@ -26,7 +26,7 @@ The export is written to `exported/` next to the checkpoint (`--output
 | `policy.onnx` | The policy, exported by rsl_rl's own exporter, with the deploy metadata below attached. |
 | `policy.pt` | The same policy as TorchScript. |
 | `env.yaml`, `agent.yaml` | Unchanged copies of the run's `params/`: the task and training settings. |
-| `code_state.yaml` | The code the run was trained with, for runs whose training recorded one. |
+| `code_state.yaml` | The code the run was trained with, for runs whose training recorded one; see [Code changes since training](code-changes-since-training.md). |
 | `export.log` | Append-only history of every export written here: which checkpoint, when, and what it printed. |
 
 The ONNX graph is whatever rsl_rl's exporter produces for the actor class: a
@@ -65,6 +65,9 @@ head are baked into the graph.
 Every check along the way is listed in the next section, in the order it runs.
 
 ## Checks, step by step
+
+For what training records and what play compares, see
+[Code changes since training](code-changes-since-training.md).
 
 Each check either **stops** the export, **asks** in the terminal, **warns**
 and carries on, or just **notes** something. `--strict` turns the warnings it

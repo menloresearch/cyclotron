@@ -36,7 +36,7 @@ Three things to know before loading anything else:
   Isaac Sim starts, with a pointer to `--export`.
 - **Code changes since training.** Before loading the checkpoint, play prints
   what changed in the code since the run was trained; see
-  [Code changes since training](../README.md#code-changes-since-training).
+  [Code changes since training](code-changes-since-training.md).
   Changes are warnings (`--strict` turns them into a stop). Two cases always
   stop: a checkpoint that no longer fits the network the current code builds,
   and a changed actor class or activation, which would load the old weights

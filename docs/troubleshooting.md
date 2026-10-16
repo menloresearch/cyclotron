@@ -74,7 +74,7 @@ the policy's network. The message above the stop names each difference, and
 `code_state.yaml` names the trained commit. Check that commit out and re-run,
 decide the changes are harmless and run without `--strict`, or pass changed
 policy settings back as overrides. Background in
-[Code changes since training](../README.md#code-changes-since-training).
+[Code changes since training](code-changes-since-training.md).
 
 ### "The current code can't rebuild the policy settings this run was trained with" (export, check 9)
 

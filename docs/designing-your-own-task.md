@@ -268,7 +268,7 @@ for everything downstream of training. Break them knowingly or not at all.
    the run's saved `env.yaml` and `agent.yaml` and stops where your checkout
    can't, while `--play` runs the old checkpoint with the current code's
    settings and names what your checkout changed since —
-   see [Code changes since training](../README.md#code-changes-since-training).
+   see [Code changes since training](code-changes-since-training.md).
    That is the reason to make a new task instead of editing
    `Asimov1VelocityEnvCfg` in place: old runs keep their config, your variant
    gets its own.
