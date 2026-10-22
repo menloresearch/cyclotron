@@ -326,7 +326,7 @@ def test_default_benchmark_is_valid_for_the_pinned_app(monkeypatch, tmp_path):
     monkeypatch.setattr(app, "prepare", lambda: None)
     inspection = app.inspect_benchmark(ROOT / "benchmarks/default")
     assert not inspection["errors"] and not inspection["problems"]
-    assert [task["id"] for task in inspection["tasks"]] == ["survival_rate_v1", "survival_time_v1"]
+    assert [task["id"] for task in inspection["tasks"]] == ["survival_rate_v2", "survival_time_v2"]
 
 
 @pytest.mark.skipif(not __import__("shutil").which("node"), reason="needs node")

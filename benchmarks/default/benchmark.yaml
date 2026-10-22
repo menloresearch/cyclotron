@@ -3,11 +3,11 @@
 name: default
 title: default
 description: A few basic tests to check that the policy is running properly.
-version: 1                      # bump whenever a change can move a score
+version: 2                      # bump whenever a change can move a score
 harness:
   repo: https://github.com/menloresearch/humanoid-policy-viewer
-  protocol: 1
-  tested_commit: 8bcbf47d6e7b206e1a9527029eab0fb2326630eb
+  protocol: 2
+  tested_commit: 4e62f702ba45f357e1bc1dfc8c94e39de2cf8fa2
 requires:
   robot: { name: asimov-1 }
   policy_interface: velocity-command
@@ -19,6 +19,6 @@ defaults:
 tests:                          # { all: true }, { config: <category> } or { id: <category>/<name> }
   - { all: true }
 tasks:                          # leaderboard numbers; _v<version> is appended to each id
-  - { id: survival_rate, metric: survival_rate@1 }    # scope: { config, id, tag } narrows a task
-  - { id: survival_time, metric: survival_time@1 }
-reference_policies: []          # policies `npm run hf baseline` compares
+  - { id: survival_rate, metric: survival_rate@2 }    # scope: { config, id, tag } narrows a task
+  - { id: survival_time, metric: survival_time@2 }
+reference_policies: []

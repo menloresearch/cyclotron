@@ -51,8 +51,9 @@ name so HPV can open it in the results viewer.
 Without a benchmark argument, `--benchmark` runs and `--view` opens
 `benchmarks/default/`, cyclotron's own default locomotion suite. It started as
 a copy of HPV's `benchmarks/default` at `a90090b` and is maintained here from
-then on: an HPV upgrade does not change it. Its tests and scoring match HPV's
-copy at that commit; only the README differs.
+then on: an HPV upgrade does not change it. With HPV `4e62f70` it moved to
+protocol 2 (version 2, task IDs `survival_rate_v2` and `survival_time_v2`); its
+tests are unchanged.
 
 `--view` without `--benchmark` edits this folder in place, like any local
 folder, so a save in HPV's UI changes tracked files. Review them with
