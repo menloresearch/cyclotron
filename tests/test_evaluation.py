@@ -109,6 +109,19 @@ def test_manifest_rejects_symlinks_and_missing_files(tmp_path):
         provenance.file_manifest(tmp_path, ["missing"])
 
 
+def test_untracked_files_leave_the_harness_checkout_clean(monkeypatch):
+    # An untracked logs/ (HPV's viewer writes one) is all `git status` reports here.
+    def check_output(command, **kwargs):
+        if "rev-parse" in command:
+            return SHA
+        return "" if "--untracked-files=no" in command else "?? logs/\n"
+    monkeypatch.setattr(provenance.subprocess, "check_output", check_output)
+    assert provenance.git_state(ROOT) == {"commit": SHA, "dirty": True}
+    harness = HPV(ROOT)
+    monkeypatch.setattr(harness, "pin", lambda: SHA)
+    assert harness.state()["dirty"] is False
+
+
 @pytest.fixture
 def fake_hub(tmp_path, monkeypatch):
     monkeypatch.setenv("CYCLOTRON_CACHE_DIR", str(tmp_path / "cache"))

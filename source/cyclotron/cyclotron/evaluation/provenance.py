@@ -53,12 +53,13 @@ def read_json(path):
         return json.load(stream)
 
 
-def git_state(path):
+def git_state(path, untracked=True):
     def git(*args):
         return subprocess.check_output(["git", "-C", str(path), *args], text=True, stderr=subprocess.DEVNULL).strip()
 
+    status = ["status", "--porcelain"] if untracked else ["status", "--porcelain", "--untracked-files=no"]
     try:
-        return {"commit": git("rev-parse", "HEAD"), "dirty": bool(git("status", "--porcelain"))}
+        return {"commit": git("rev-parse", "HEAD"), "dirty": bool(git(*status))}
     except (OSError, subprocess.CalledProcessError):
         return {"commit": None, "dirty": None}
 

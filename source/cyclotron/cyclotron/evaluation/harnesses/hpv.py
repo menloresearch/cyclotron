@@ -41,7 +41,12 @@ class HPV:
         return [name for name in names if name == "eval.yaml" or any(re.fullmatch(p, name) for p in cls.dataset_patterns)]
 
     def state(self):
-        return {"name": self.name, "repo": self.repo, "pin": self.pin(), **git_state(self.path)}
+        return {"name": self.name, "repo": self.repo, "pin": self.pin(), **self.checkout()}
+
+    def checkout(self):
+        # Untracked files cannot change a tracked module, and HPV's viewer writes an untracked
+        # logs/; like HPV's own provenance, they do not make its checkout dirty.
+        return git_state(self.path, untracked=False)
 
     def pin(self):
         line = subprocess.check_output(
@@ -64,8 +69,8 @@ class HPV:
         refresh = False
         if not (self.path / "package.json").is_file():
             subprocess.run(["git", "-C", str(self.root), "submodule", "update", "--init", "--checkout", "--depth", "1", submodule], check=True)
-        elif git_state(self.path)["commit"] != self.pin():
-            if git_state(self.path)["dirty"]:
+        elif self.checkout()["commit"] != self.pin():
+            if self.checkout()["dirty"]:
                 print(f"Warning: {submodule} has local changes; leaving its checkout untouched", file=sys.stderr)
             else:
                 subprocess.run(["git", "-C", str(self.root), "submodule", "update", "--checkout", "--depth", "1", submodule], check=True)
