@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import errno
 import hashlib
 import os
 import shutil
+import socket
+import stat
 import subprocess
 import tempfile
 from concurrent.futures import ThreadPoolExecutor
@@ -19,6 +22,8 @@ pytestmark = pytest.mark.skipif(shutil.which("git") is None, reason="needs git")
 URDF = "sim-model/urdf/asimov_1.urdf"
 OLD_URDF = '<robot name="asimov_1"><limit lower="-2.094395" upper="1"/></robot>\n'
 NEW_URDF = '<robot name="asimov_1"><limit lower="-1.57" upper="1.57"/></robot>\n'
+LITE = "sim-model-lite/urdf/asimov_1.urdf"
+LITE_URDF = '<robot name="asimov_1"><!-- fewer meshes --></robot>\n'
 
 
 def git(cwd, *args) -> str:
@@ -41,8 +46,10 @@ def model_repo(tmp_path, monkeypatch):
     git(source, "config", "commit.gpgsign", "false")
     (source / "sim-model" / "urdf").mkdir(parents=True)
     (source / "sim-model" / "assets" / "meshes").mkdir(parents=True)
+    (source / "sim-model-lite" / "urdf").mkdir(parents=True)
     (source / "cad").mkdir()
     (source / URDF).write_text(OLD_URDF)
+    (source / LITE).write_text(LITE_URDF)
     (source / "sim-model" / "assets" / "meshes" / "leg.STL").write_text("mesh")
     (source / "cad" / "frame.step").write_text("not part of the model")
     (source / "README.md").write_text("asimov-1\n")
@@ -101,8 +108,8 @@ def as_dict(cfg) -> dict:
     return {"scene": {"robot": {"spawn": {"asset_path": cfg.scene.robot.spawn.asset_path}}}}
 
 
-def cached(model_repo, commit: str):
-    return model_repo.tmp / "cache" / "robot-models" / "menloresearch__asimov-1" / commit
+def cached(model_repo, commit: str, folder: str = "sim-model"):
+    return model_repo.tmp / "cache" / "robot-models" / "menloresearch__asimov-1" / f"{commit}__{folder}"
 
 
 def test_cache_dir_is_cyclotron_cache_dir_else_xdg_cache_home_else_home(monkeypatch, tmp_path):
@@ -131,7 +138,7 @@ def test_a_run_trained_on_another_commit_loads_that_commit_from_the_cache(model_
     # staging folder left behind.
     assert (folder / "sim-model" / "assets" / "meshes" / "leg.STL").read_text() == "mesh"
     assert sorted(os.listdir(folder)) == ["README.md", "sim-model"]
-    assert sorted(os.listdir(folder.parent)) == [model_repo.old, f"{model_repo.old}.lock"]
+    assert sorted(os.listdir(folder.parent)) == [folder.name, f"{folder.name}.lock"]
     # Converted to USD in a folder of its own, not one another process's robot model can share.
     usd_dir = cfg.scene.robot.spawn.usd_dir
     assert os.path.dirname(usd_dir) == str(model_repo.tmp / "tmp" / "IsaacLab") and os.listdir(usd_dir) == []
@@ -175,6 +182,77 @@ def test_concurrent_loads_fetch_the_model_once(model_repo, monkeypatch):
     with ThreadPoolExecutor(4) as pool:
         paths = list(pool.map(lambda _: materialize(record(model_repo.old)), range(4)))
     assert len(fetches) == 1 and len(set(paths)) == 1
+
+
+def test_runs_recording_other_model_folders_at_one_commit_have_a_folder_each(model_repo):
+    lite = {**record(model_repo.old, LITE_URDF), "urdf_filepath": LITE}
+    assert materialize(record(model_repo.old)) == str(cached(model_repo, model_repo.old) / URDF)
+    assert materialize(lite) == str(cached(model_repo, model_repo.old, "sim-model-lite") / LITE)
+    # Neither replaced the other.
+    assert materialize(record(model_repo.old)) == str(cached(model_repo, model_repo.old) / URDF)
+    assert not (cached(model_repo, model_repo.old) / "sim-model-lite").exists()
+    assert robot_model._cache_key("0" * 40, "models/sim/urdf/a.urdf") == "0" * 40 + "__models%2Fsim"
+
+
+def test_a_staging_folder_left_by_a_killed_fetch_is_replaced(model_repo):
+    folder = cached(model_repo, model_repo.old)
+    staging = folder.parent / f"{folder.name}.{socket.gethostname()}.staging"
+    (staging / ".git").mkdir(parents=True)
+    (staging / "half-fetched").write_text("")
+    assert materialize(record(model_repo.old)) == str(folder / URDF)
+    assert sorted(os.listdir(folder)) == ["README.md", "sim-model"] and not staging.exists()
+
+
+def test_a_folder_another_host_put_in_place_meanwhile_is_used_and_checked(model_repo, monkeypatch):
+    folder = cached(model_repo, model_repo.old)
+    fetch = robot_model._fetch
+
+    def fetch_while_another_host_does(url, commit, model_folder, staging, objects, edit=""):
+        fetch(url, commit, model_folder, staging, objects)
+        shutil.copytree(staging, folder)
+        with open(folder / URDF, "a") as f:
+            f.write(edit)
+
+    monkeypatch.setattr(robot_model, "_fetch", fetch_while_another_host_does)
+    assert materialize(record(model_repo.old)) == str(folder / URDF)
+    assert sorted(os.listdir(folder.parent)) == [folder.name, f"{folder.name}.lock"]
+
+    shutil.rmtree(folder)
+    monkeypatch.setattr(robot_model, "_fetch", lambda *args: fetch_while_another_host_does(*args, edit="<!-- -->"))
+    with pytest.raises(robot_model.RobotModelUnavailable, match="in the cached copy .* has sha256"):
+        materialize(record(model_repo.old))
+
+
+def test_the_cache_takes_the_umask_so_other_users_can_read_it(model_repo):
+    umask = os.umask(0o002)
+    try:
+        urdf = materialize(record(model_repo.old))
+    finally:
+        os.umask(umask)
+    folder = cached(model_repo, model_repo.old)
+    assert stat.S_IMODE(os.stat(folder).st_mode) == 0o775
+    assert stat.S_IMODE(os.stat(folder / "sim-model").st_mode) == 0o775
+    assert stat.S_IMODE(os.stat(urdf).st_mode) == 0o664
+
+
+def test_a_cache_that_cant_be_locked_is_a_note_and_a_folder_in_place_needs_no_lock(model_repo, monkeypatch):
+    def flock(*args):
+        raise OSError(errno.ENOLCK, "No locks available")
+
+    current = str(current_model(model_repo, model_repo.new))
+    run = trained_run(model_repo.tmp, record(model_repo.old))
+    with monkeypatch.context() as patch:
+        patch.setattr(robot_model.fcntl, "flock", flock)
+        cfg = env_cfg(current)
+        loaded, unavailable = load_training_robot_model(cfg, run)
+        assert loaded is None and cfg.scene.robot.spawn.asset_path == current
+        reason = f"couldn't be loaded: [Errno {errno.ENOLCK}] No locks available"
+        assert unavailable.startswith(f"The robot model the run was trained with {reason}")
+    materialize(record(model_repo.old))
+    monkeypatch.setattr(robot_model.fcntl, "flock", flock)
+    cfg = env_cfg(current)
+    assert load_training_robot_model(cfg, run)[1] is None
+    assert cfg.scene.robot.spawn.asset_path == str(cached(model_repo, model_repo.old) / URDF)
 
 
 def test_a_run_on_the_current_model_loads_it_as_it_is(model_repo):

@@ -7,10 +7,11 @@ the folder ``ASIMOV_1_MODEL_DIR`` names, with its meshes) is fetched at the reco
 the environment's robot is pointed at it. Check 10d then compares the run with the model it was trained on. When that
 can't be done (no clean commit recorded, no network), the current model is loaded as before and 10d says why.
 
-The cache holds one folder per repository and commit, ``robot-models/<owner>__<name>/<commit>/``, with that commit's
-model folder and the files at the repository's root, and no git files. It is fetched into a staging folder next to it
-and renamed into place once its urdf has the recorded sha256, under a lock, so concurrent exports fetch it once; a
-folder in place is never changed. Its urdf is checked against the recorded sha256 each time it is used.
+The cache holds one folder per repository, commit and model folder,
+``robot-models/<owner>__<name>/<commit>__<model folder>/``, with that commit's model folder and the files at the
+repository's root, and no git files. It is fetched into a staging folder next to it and renamed into place once its urdf
+has the recorded sha256, under a lock, so concurrent exports fetch it once; a folder in place is never changed, and is
+read without the lock. Its urdf is checked against the recorded sha256 each time it is used.
 
 Plain Python with no Isaac Lab imports, so it can run without Isaac Sim and in tests.
 """
@@ -22,8 +23,10 @@ import os
 import posixpath
 import re
 import shutil
+import socket
 import subprocess
 import tempfile
+import urllib.parse
 
 from cyclotron.code_state import _git, _sha256, _short, training_robot_model
 
@@ -52,6 +55,12 @@ def cache_dir() -> str:
 def _model_folder(urdf_filepath: str) -> str:
     # sim-model/urdf/asimov_1.urdf -> sim-model: the folder ASIMOV_1_MODEL_DIR names, with the meshes the urdf loads.
     return posixpath.dirname(posixpath.dirname(urdf_filepath))
+
+
+def _cache_key(commit: str, urdf_filepath: str) -> str:
+    # <commit>__sim-model: runs at one commit can record different model folders. A / in it is written %2F, so each
+    # model folder has a folder of its own.
+    return f"{commit}__{urllib.parse.quote(_model_folder(urdf_filepath), safe='')}"
 
 
 def _run_git(cwd: str, *args: str, check: bool = True) -> bool:
@@ -123,9 +132,34 @@ def _fetch(url: str, commit: str, folder: str, staging: str, objects: str | None
     shutil.rmtree(os.path.join(staging, ".git"))
 
 
+def _fetch_into(folder: str, trained: dict, objects: str | None) -> None:
+    """Fetch the run's model into the cache folder ``folder``; the caller holds its lock."""
+    repo, commit, path = trained["repo"], trained["commit"], trained["urdf_filepath"]
+    # Named after the folder, so one left by a fetch that was killed is removed here; and after the host, since hosts
+    # sharing the cache may not see each other's lock.
+    staging = f"{folder}.{socket.gethostname()}.staging"
+    shutil.rmtree(staging, ignore_errors=True)
+    # The umask's mode, not tempfile.mkdtemp's 0700, so the other users of a shared cache can read it.
+    os.mkdir(staging)
+    try:
+        try:
+            _fetch(REPOSITORY_URL.format(repo=repo), commit, _model_folder(path), staging, objects)
+        except RobotModelUnavailable as error:
+            raise RobotModelUnavailable(f"fetching {repo} @ {_short(commit)} failed ({error})") from error
+        _check_urdf(os.path.join(staging, path), trained, f"{path} at {repo} @ {_short(commit)}")
+        try:
+            os.rename(staging, folder)
+        except OSError:
+            # Put in place meanwhile by another host; its urdf is checked like any cached copy's.
+            if not os.path.isdir(folder):
+                raise
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
+
+
 def materialize(trained: dict, objects: str | None = None) -> str:
     """The path of the urdf a run was trained with, in a copy of its model folder at the recorded commit in cyclotron's
-    cache (``robot-models/<owner>__<name>/<commit>/``), fetched there first when missing.
+    cache (``robot-models/<owner>__<name>/<commit>__<model folder>/``), fetched there first when missing.
 
     ``trained`` is the run's ``robot_model`` record (``training_robot_model``). ``objects`` is a local git object
     folder to take the commit's files from when it has them, so only what it lacks is downloaded. Raises
@@ -135,27 +169,21 @@ def materialize(trained: dict, objects: str | None = None) -> str:
     _check_fetchable(trained)
     repo, commit, path = trained["repo"], trained["commit"], trained["urdf_filepath"]
     parent = os.path.join(cache_dir(), "robot-models", repo.replace("/", "__"))
-    folder = os.path.join(parent, commit)
-    os.makedirs(parent, exist_ok=True)
-    # One process fetches while the others wait for it, then find the folder in place.
-    with open(folder + ".lock", "a") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
-        if not os.path.isdir(folder):
-            staging = tempfile.mkdtemp(prefix=".staging-", dir=parent)
-            try:
-                try:
-                    _fetch(REPOSITORY_URL.format(repo=repo), commit, _model_folder(path), staging, objects)
-                except RobotModelUnavailable as error:
-                    raise RobotModelUnavailable(f"fetching {repo} @ {_short(commit)} failed ({error})") from error
-                _check_urdf(os.path.join(staging, path), trained, f"{path} at {repo} @ {_short(commit)}")
-                os.rename(staging, folder)
-            finally:
-                shutil.rmtree(staging, ignore_errors=True)
-        urdf = os.path.join(folder, path)
-        try:
-            _check_urdf(urdf, trained, f"{path} in the cached copy {folder}")
-        except RobotModelUnavailable as error:
-            raise RobotModelUnavailable(f"{error} (delete that folder to fetch it again)") from error
+    folder = os.path.join(parent, _cache_key(commit, path))
+    # A folder in place is complete and never changed, so it is read without the lock, which the other users of a
+    # shared cache may not be able to take.
+    if not os.path.isdir(folder):
+        os.makedirs(parent, exist_ok=True)
+        # One process fetches while the others wait for it, then find the folder in place.
+        with open(folder + ".lock", "a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            if not os.path.isdir(folder):
+                _fetch_into(folder, trained, objects)
+    urdf = os.path.join(folder, path)
+    try:
+        _check_urdf(urdf, trained, f"{path} in the cached copy {folder}")
+    except RobotModelUnavailable as error:
+        raise RobotModelUnavailable(f"{error} (delete that folder to fetch it again)") from error
     return urdf
 
 

@@ -97,7 +97,8 @@ from there:
 The same line names a robot model the checkout already has. The cache is
 `$CYCLOTRON_CACHE_DIR`, else `$XDG_CACHE_HOME/cyclotron`, else
 `~/.cache/cyclotron`; each model is in
-`robot-models/<owner>__<repo>/<commit>/`. Only that commit's model folder is
+`robot-models/<owner>__<repo>/<commit>__<model folder>/`, readable by the
+other users of a shared cache. Only that commit's model folder is
 downloaded, from GitHub, and only the files your `third_party/asimov-1`
 checkout doesn't already have, so a model it was checked out at before is
 loaded without a network. A model is fetched once and checked against the
