@@ -338,8 +338,27 @@ def test_default_benchmark_is_valid_for_the_pinned_app(monkeypatch, tmp_path):
     harness = HPV(ROOT)
     monkeypatch.setattr(harness, "prepare", lambda: None)
     inspection = harness.inspect_benchmark(ROOT / "benchmarks/default")
+    assert inspection["schema"] == "hpv-inspection/1"
     assert not inspection["errors"] and not inspection["problems"]
     assert [task["id"] for task in inspection["tasks"]] == ["survival_rate_v2", "survival_time_v2"]
+
+
+@pytest.mark.skipif(not __import__("shutil").which("node")
+                    or not (ROOT / "third_party/humanoid-policy-viewer/node_modules/yaml").is_dir(),
+                    reason="needs node and the harness's npm dependencies")
+def test_policy_inspection_records_hashes_and_stops_on_errors(monkeypatch, tmp_path):
+    monkeypatch.setenv("CYCLOTRON_CACHE_DIR", str(tmp_path / "cache"))
+    harness = HPV(ROOT)
+    monkeypatch.setattr(harness, "prepare", lambda: None)
+    bundled = harness.path / "public/examples/checkpoints/asimov/model_aug_18_1"
+    policy = harness.inspect_policy({"path": str(bundled)})
+    assert policy["primary"] == "policy_isaaclab_new.onnx" and set(policy["hpv_hashes"]) == {"onnx", "envYaml"}
+    assert policy["files"]["env.yaml"] == policy["hpv_hashes"]["envYaml"]
+    # Without env.yaml the viewer would guess the policy's gains: cyclotron stops with HPV's reason.
+    (tmp_path / "no-env").mkdir()
+    (tmp_path / "no-env/policy.onnx").write_bytes((bundled / policy["primary"]).read_bytes())
+    with pytest.raises(ValueError, match="cannot be run:\n  - missing env.yaml"):
+        harness.inspect_policy({"path": str(tmp_path / "no-env")})
 
 
 @pytest.mark.skipif(not __import__("shutil").which("node"), reason="needs node")

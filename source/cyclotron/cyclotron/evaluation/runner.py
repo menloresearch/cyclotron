@@ -86,7 +86,6 @@ def run(root, policies, benchmark=None, harness_name=None, revision=None, output
     finally:
         write_json(sidecar, manifest)
     print(f"\nCyclotron result: {directory}")
-    print("HPV's local-source upload hint does not apply; use cyclotron --benchmark submit for provenance checks.")
     print(f"View: ./cyclotron.sh --benchmark view {directory}")
     print(f"Check submission: ./cyclotron.sh --benchmark submit {directory} --dry-run")
     return directory

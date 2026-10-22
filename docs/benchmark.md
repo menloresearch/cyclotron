@@ -68,10 +68,10 @@ the pinned HPV, so an upgrade that changes the format or protocol fails there.
 
 ### Scoring protocol 2
 
-The pinned HPV implements scoring protocol 2, and runs a benchmark only when its
-`harness.protocol` is 2 (`--force` runs others, locally only). Protocol 2 adds
-metrics that judge a run by how it ends, so a robot that falls and gets back up
-survives:
+The pinned HPV (`55f7a07`) implements scoring protocol 2, and runs a benchmark
+only when its `harness.protocol` is 2 (`--force` runs others, locally only).
+Protocol 2 adds metrics that judge a run by how it ends, so a robot that falls
+and gets back up survives:
 
 | Metric | One run (test x repeat) |
 | --- | --- |
@@ -150,8 +150,7 @@ Submission requires:
 
 Cyclotron verifies pinned Hub bytes again during submission, including model
 configuration and tracking overrides. It records provenance alongside HPV's
-`source: local` result rather than changing that field. HPV's own printed
-local-source upload hint does not determine cyclotron eligibility.
+`source: local` result rather than changing that field.
 
 Scores go to `.eval_results/<org>__<benchmark>.yaml` in each evaluated model
 repo. Existing entries for other datasets/tasks are kept. Dates are strings,
@@ -201,7 +200,8 @@ After saving, publish the folder with cyclotron:
 Before writing remotely, cyclotron:
 
 1. Stages a coherent copy of the folder and detects concurrent edits.
-2. Calls HPV's offline validation and exact scored-content hash implementation.
+2. Runs HPV's offline inspect command (see [adding a harness](#storage-and-adding-a-harness)):
+   its own validation, run plan and exact scored-content hash.
 3. Checks protocol compatibility and a clean, public harness commit, and a
    clean cyclotron checkout. Bump `benchmark.yaml`'s version when scored content
    changes; versions cannot decrease.
@@ -252,7 +252,7 @@ tasks:
     name: humanoid-policy-viewer
     repo: https://github.com/menloresearch/humanoid-policy-viewer
     protocol: 2
-    commit: 4e62f702ba45f357e1bc1dfc8c94e39de2cf8fa2
+    commit: 55f7a078c56adaabacc81090bafd8a39b0962dee
 ```
 
 `name` is the registered harness, `protocol` the scoring protocol the results
@@ -277,8 +277,8 @@ command to retry. Existing tags are never moved.
 
 Dedicated pull/diff/baseline commands are not part of this integration. Hub
 working copies are created when opening a dataset in the viewer, and version
-comparison is built into publication. Standalone HPV commands still exist,
-but cyclotron does not call their HF operations.
+comparison is built into publication. HPV itself only reads from the Hub; it
+has no publish or submit commands.
 
 ### Hub registration (external prerequisite)
 
@@ -313,7 +313,12 @@ Adapters live in `source/cyclotron/cyclotron/evaluation/harnesses/`. Add a
 trusted adapter and explicit registry entry/legacy repository alias in
 `harnesses/base.py`. An adapter owns bootstrap, file selection, view/run
 commands, benchmark inspection/task descriptors, result interpretation and
-harness-specific blockers. Cyclotron owns all Hub access and provenance. HPV's
-thin offline JS bridge is `scripts/harnesses/hpv-inspect.mjs`; it reuses HPV's
-format validation and hash functions without calling its HF workflows. A future
-harness need not use Node.
+harness-specific blockers. Cyclotron owns all Hub access and provenance. The
+HPV adapter reads benchmarks and policies through HPV's own offline inspect
+command, which needs only its npm dependencies (no robot model, browser or
+network): `node scripts/inspect.mjs benchmark <dir> [<commit>]` (schema
+`hpv-inspection/1`: validation, run plan, scored-content hash, card and each
+file as published) and `node scripts/inspect.mjs policy <path>` (schema
+`hpv-policy-inspection/1`: the ONNX to run, the hashes a result records, and
+errors that stop a run). The adapter checks both schema names. A future harness
+need not use Node.

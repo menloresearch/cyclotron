@@ -11,6 +11,8 @@ from pathlib import Path
 from ..hub import cache_root
 from ..provenance import file_manifest, git_state
 
+INSPECTION_SCHEMAS = {"benchmark": "hpv-inspection/1", "policy": "hpv-policy-inspection/1"}
+
 
 class HPV:
     name = "humanoid-policy-viewer"
@@ -141,16 +143,15 @@ class HPV:
     def view_result(self, directory, options):
         self.execute(["scripts/benchmark.mjs", "view", directory, *self.headless_options(options)])
 
-    def inspect_benchmark(self, directory, commit=None):
-        # Cyclotron's offline bridge. HPV's own `inspect` command (schema hpv-inspection/1, the
-        # same fields) can replace it here: only this command and the schema name change.
-        args = [self.root / "scripts/harnesses/hpv-inspect.mjs", self.path, "inspect", directory]
-        if commit:
-            args.append(commit)
-        result = self.execute(args, capture=True)
-        if result.get("schema") != "cyclotron-hpv-inspection/1":
-            raise ValueError("Unsupported HPV inspection schema")
+    def inspect(self, kind, *args):
+        # HPV's offline inspect command: its own validation and hashes, no network or Hub access.
+        result = self.execute(["scripts/inspect.mjs", kind, *args], capture=True)
+        if result.get("schema") != INSPECTION_SCHEMAS[kind]:
+            raise ValueError(f"Unsupported HPV {kind} inspection schema: {result.get('schema')}")
         return result
+
+    def inspect_benchmark(self, directory, commit=None):
+        return self.inspect("benchmark", directory, *([commit] if commit else []))
 
     def task_specs(self, inspection):
         return inspection["tasks"]
@@ -161,7 +162,9 @@ class HPV:
         return {"name": self.name, "repo": self.repo, "protocol": protocol, "commit": commit}
 
     def inspect_policy(self, item):
-        info = self.execute([self.root / "scripts/harnesses/hpv-inspect.mjs", self.path, "policy", item["path"]], capture=True)
+        info = self.inspect("policy", item["path"])
+        if info["errors"]:
+            raise ValueError(f"{item['path']} cannot be run:\n" + "\n".join(f"  - {error}" for error in info["errors"]))
         directory = Path(info["policyDir"])
         return {**item, "path": str(directory), "primary": info["primary"], "hpv_hashes": info["hashes"],
                 "files": file_manifest(directory)}

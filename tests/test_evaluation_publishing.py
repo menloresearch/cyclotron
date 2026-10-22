@@ -204,6 +204,8 @@ def test_start_poses_upload_as_json_text_and_score_the_same(tmp_path, monkeypatc
     uploaded = [json.loads(line) for line in files["data/locomotion/test.jsonl"].splitlines()]
     assert isinstance(uploaded[0]["start"], str) and json.loads(uploaded[0]["start"]) == START
     assert uploaded[1:] == [json.loads(line) for line in lines[1:]]
+    # benchmark.yaml records the harness commit it was checked with.
+    assert yaml.safe_load(files["benchmark.yaml"])["harness"]["tested_commit"] == HPV(ROOT).checkout()["commit"]
     api.create_commit.assert_not_called()
     # Read back in its Hub form, the benchmark is the same scored content as the local folder.
     published = tmp_path / "published"
