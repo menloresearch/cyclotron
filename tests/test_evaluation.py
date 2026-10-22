@@ -313,6 +313,7 @@ def test_submit_dry_run_pinned_inputs_and_no_writes(recorded_result, tmp_path, m
     commit = Mock()
     monkeypatch.setattr(eval_results, "commit_files", commit)
     api = Mock(endpoint="https://huggingface.co")
+    api.list_repo_commits.return_value = [SimpleNamespace(commit_id="b" * 40), SimpleNamespace(commit_id=SHA)]
     if "other-harness" in harness:
         # A task's results only count from the harness its eval.yaml names.
         with pytest.raises(ValueError, match="scored by other-harness"):
@@ -320,6 +321,28 @@ def test_submit_dry_run_pinned_inputs_and_no_writes(recorded_result, tmp_path, m
     else:
         assert len(submit(ROOT, tmp_path, dry_run=True, api=api)) == 1
         assert read.call_args.args[3] == SHA
+    commit.assert_not_called()
+
+
+def test_submit_requires_a_merged_dataset_revision(recorded_result, tmp_path, monkeypatch):
+    from cyclotron.evaluation import eval_results
+
+    run, manifest = recorded_result
+    provenance.write_json(tmp_path / "result.json", run)
+    manifest["result_sha256"] = provenance.sha256(tmp_path / "result.json")
+    provenance.write_json(tmp_path / "cyclotron.json", manifest)
+    monkeypatch.setattr(eval_results, "download", lambda ref, *a, **kw: {"sha": ref["revision"], "files": {}})
+    read, commit = Mock(), Mock()
+    monkeypatch.setattr(eval_results, "read_repo_text", read)
+    monkeypatch.setattr(eval_results, "commit_files", commit)
+    # A pinned refs/pr/N revision resolves to a commit that main does not contain.
+    api = Mock(endpoint="https://huggingface.co")
+    api.list_repo_commits.return_value = [SimpleNamespace(commit_id="b" * 40)]
+    with pytest.raises(ValueError, match="not in the dataset's main history"):
+        submit(ROOT, tmp_path, api=api)
+    assert api.list_repo_commits.call_args.args[0] == "org/suite"
+    assert api.list_repo_commits.call_args.kwargs == {"repo_type": "dataset", "revision": "main"}
+    read.assert_not_called()
     commit.assert_not_called()
 
 

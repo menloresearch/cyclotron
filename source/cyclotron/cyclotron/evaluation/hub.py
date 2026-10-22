@@ -185,6 +185,11 @@ def working_copy(item, root):
     return destination
 
 
+def on_main(api, repo_id, sha, repo_type="dataset"):
+    """Whether a commit is in main's history: merged, not only a pending PR revision."""
+    return sha in {commit.commit_id for commit in api.list_repo_commits(repo_id, repo_type=repo_type, revision="main")}
+
+
 def read_repo_text(api, repo_id, path, revision, repo_type="model"):
     """A file's text at a revision, or None only when the Hub says the file does not exist there."""
     from huggingface_hub import hf_hub_download

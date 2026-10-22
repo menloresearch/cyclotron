@@ -143,6 +143,8 @@ Submission requires:
 - A complete cyclotron-generated manifest, unchanged result and matching inputs.
 - Both policy and dataset resolved from the Hub at immutable commits; local
   working folders are not made eligible by attaching a repo ID afterward.
+- A dataset commit in the dataset's main history: a pending PR's revision
+  (`@refs/pr/<n>`) is refused until the PR is merged.
 - Known, clean cyclotron and harness checkouts when the run was made.
 - Matching harness protocol, valid benchmark, full unique cell set, no failures,
   no test/repeat/force overrides and no unmerged shard.
@@ -152,6 +154,10 @@ Submission requires:
 Cyclotron verifies pinned Hub bytes again during submission, including model
 configuration and tracking overrides. It records provenance alongside HPV's
 `source: local` result rather than changing that field.
+
+Known limitation: unlike `publish`, `submit` does not require the recorded
+cyclotron and harness commits to be on a public upstream branch, only known
+and clean, so a result can name a commit others cannot check out.
 
 Scores go to `.eval_results/<org>__<benchmark>.yaml` in each evaluated model
 repo. Existing entries for other datasets/tasks are kept. Dates are strings,

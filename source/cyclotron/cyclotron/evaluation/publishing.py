@@ -7,7 +7,7 @@ from pathlib import Path
 import yaml
 
 from .harnesses.base import select_harness
-from .hub import cache_root, commit_files, download, hub_api, parse_reference, safe_name
+from .hub import cache_root, commit_files, download, hub_api, on_main, parse_reference, safe_name
 from .provenance import file_manifest, git_state
 
 
@@ -183,7 +183,7 @@ def release(root, repo_id, revision, dry_run=False, api=None):
     if revision.startswith("refs/pr/"):
         raise ValueError("Release a merged main-branch revision, not a pending PR")
     info = api.repo_info(repo_id, repo_type="dataset", revision=revision)
-    if info.sha not in {commit.commit_id for commit in api.list_repo_commits(repo_id, repo_type="dataset", revision="main")}:
+    if not on_main(api, repo_id, info.sha):
         raise ValueError("Release revision is not in the dataset's main history")
     harness = select_harness(root)
     item = download({"id": repo_id, "repo_type": "dataset", "revision": info.sha}, harness.dataset_files, api)

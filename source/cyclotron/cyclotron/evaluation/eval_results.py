@@ -5,7 +5,7 @@ import math
 import yaml
 
 from .harnesses.base import select_harness
-from .hub import download, hub_api, read_repo_text, commit_files
+from .hub import download, hub_api, on_main, read_repo_text, commit_files
 from .provenance import core_blockers, read_json, result_dir
 
 
@@ -93,6 +93,10 @@ def submit(root, directory, pr=False, dry_run=False, api=None):
         if checked["sha"] != item["sha"] or checked["files"] != item["files"]:
             raise ValueError(f"Recorded input differs from pinned Hub bytes: {item['id']}")
     dataset = manifest["benchmark"]
+    # A pending PR's revision (refs/pr/N) can be pinned too, but its content was never merged.
+    if not on_main(api, dataset["id"], dataset["sha"]):
+        raise ValueError(f"datasets/{dataset['id']}@{dataset['sha']} is not in the dataset's main history "
+                         "(an unmerged PR revision?); rerun against a merged revision, such as a release tag")
     published = read_repo_text(api, dataset["id"], "eval.yaml", dataset["sha"], "dataset")
     spec = yaml.safe_load(published or "")
     if not isinstance(spec, dict) or spec.get("evaluation_framework") != "cyclotron":
