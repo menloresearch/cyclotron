@@ -178,6 +178,47 @@ def test_the_current_model_repository_supplies_the_files_it_has_without_a_networ
     assert unavailable is None and cfg.scene.robot.spawn.asset_path == str(cached(model_repo, model_repo.old) / URDF)
 
 
+def test_git_runs_without_a_terminal_and_without_the_callers_repository(monkeypatch, tmp_path):
+    calls = []
+
+    def run(args, **kwargs):
+        calls.append(kwargs)
+        return subprocess.CompletedProcess(args, 0, "out\n", "")
+
+    monkeypatch.setattr(robot_model.subprocess, "run", run)
+    monkeypatch.setenv("GIT_DIR", str(tmp_path / "other" / ".git"))
+    monkeypatch.setenv("GIT_OBJECT_DIRECTORY", str(tmp_path / "other" / ".git" / "objects"))
+    monkeypatch.setenv("GIT_CONFIG_COUNT", "0")
+    monkeypatch.delenv("GIT_SSH_COMMAND", raising=False)
+    monkeypatch.delenv("GIT_SSH", raising=False)
+    assert robot_model._run_git(str(tmp_path), "status") == "out"
+    env = calls[0]["env"]
+    assert calls[0]["stdin"] is subprocess.DEVNULL and env["GIT_TERMINAL_PROMPT"] == "0"
+    assert "GIT_DIR" not in env and "GIT_OBJECT_DIRECTORY" not in env and env["GIT_CONFIG_COUNT"] == "0"
+    # ssh, which a url.<base>.insteadOf can make it use, fails instead of asking for a passphrase or a host key...
+    assert env["GIT_SSH_COMMAND"] == "ssh -o BatchMode=yes"
+    # ...unless the user chose how git runs ssh.
+    monkeypatch.setenv("GIT_SSH_COMMAND", "ssh -i ~/.ssh/robot")
+    robot_model._run_git(str(tmp_path), "status")
+    assert calls[1]["env"]["GIT_SSH_COMMAND"] == "ssh -i ~/.ssh/robot"
+
+
+def test_the_repository_git_variables_name_is_left_alone(model_repo, monkeypatch):
+    urdf = current_model(model_repo, model_repo.new)
+    other = model_repo.tmp / "other"
+    git(model_repo.tmp, "init", "-q", str(other))
+    config = (other / ".git" / "config").read_text()
+    # As in a git hook or alias that runs cyclotron.
+    monkeypatch.setenv("GIT_DIR", str(other / ".git"))
+    monkeypatch.setenv("GIT_WORK_TREE", str(other))
+    monkeypatch.setenv("GIT_INDEX_FILE", str(other / ".git" / "index"))
+    assert robot_model._local_objects(str(urdf)) == os.path.realpath(model_repo.tmp / "asimov-1" / ".git" / "objects")
+    cfg = env_cfg(urdf)
+    assert load_training_robot_model(cfg, trained_run(model_repo.tmp, record(model_repo.old)))[1] is None
+    assert cfg.scene.robot.spawn.asset_path == str(cached(model_repo, model_repo.old) / URDF)
+    assert (other / ".git" / "config").read_text() == config and os.listdir(other) == [".git"]
+
+
 def test_concurrent_loads_fetch_the_model_once(model_repo, monkeypatch):
     fetches = []
     fetch = robot_model._fetch
@@ -295,6 +336,13 @@ def test_asimov_1_model_dir_names_the_model_to_load(model_repo, monkeypatch):
         ({"repo": None}, "the run records no repository to fetch it from"),
         ({"commit": "732cc60"}, "the run records '732cc60' as its commit, not a full commit hash"),
         ({"urdf_filepath": "../urdf/asimov_1.urdf"}, "its urdf (../urdf/asimov_1.urdf) isn't in a <folder>/urdf/"),
+        ({"urdf_filepath": "--upload-pack=x/urdf/a.urdf"}, "its urdf's path ('--upload-pack=x/urdf/a.urdf') can't be"),
+        ({"urdf_filepath": "sim-model/urdf/a\0.urdf"}, "its urdf's path ('sim-model/urdf/a\\x00.urdf') can't be"),
+        # Hand-edited records of other types say so too, instead of raising.
+        ({"commit": 732}, "the run records 732 as its commit, not a full commit hash"),
+        ({"urdf_filepath": 5}, "its urdf (5) isn't in a <folder>/urdf/"),
+        ({"repo": ["menloresearch", "asimov-1"]}, "the run records no repository to fetch it from"),
+        ({"sha256": 5}, "the run records 5 as its urdf's sha256"),
         ({"repo": "menloresearch/missing"}, "fetching menloresearch/missing @ "),
         ({"commit": "0" * 40}, "fetching menloresearch/asimov-1 @ 0000000 failed (git fetch: "),
         ({"sha256": sha256("another urdf")}, f"{URDF} at menloresearch/asimov-1 @ "),

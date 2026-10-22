@@ -102,10 +102,13 @@ the model; meshes changed without it would go unnoticed. The cache is
 `$CYCLOTRON_CACHE_DIR`, else `$XDG_CACHE_HOME/cyclotron`, else
 `~/.cache/cyclotron`; each model is in
 `robot-models/<owner>__<repo>/<commit>__<model folder>/`, readable by the
-other users of a shared cache. Only that commit's model folder is
-downloaded, from GitHub, and only the files your `third_party/asimov-1`
-checkout doesn't already have, so a model it was checked out at before is
-loaded without a network. A model is fetched once and checked against the
+other users of a shared cache. Only that commit and its trees, and the files
+of its model folder and at the repository's root, are downloaded, and only
+those your `third_party/asimov-1` checkout doesn't already have, so a model it
+was checked out at before is loaded without a network. The run records the
+repository without its host, so it is fetched from
+`github.com/<owner>/<repo>`; the commit hash and the URDF's sha256 still guard
+what is loaded. A model is fetched once and checked against the
 recorded sha256 before every use; a cached copy whose URDF no longer matches
 is refused, never fetched over (delete its folder to fetch it again).
 

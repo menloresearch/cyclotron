@@ -28,7 +28,7 @@ import subprocess
 import tempfile
 import urllib.parse
 
-from cyclotron.code_state import _git, _sha256, _short, training_robot_model
+from cyclotron.code_state import _sha256, _short, training_robot_model
 
 MODEL_DIR_VARIABLE = "ASIMOV_1_MODEL_DIR"
 # The Hydra override that names the urdf to load (``--play``); given, that urdf is loaded as it is.
@@ -36,6 +36,23 @@ ASSET_PATH_OVERRIDE = "env.scene.robot.spawn.asset_path"
 # Where a run's recorded repository (owner/name of its origin remote) is fetched from.
 REPOSITORY_URL = "https://github.com/{repo}.git"
 GIT_TIMEOUT = 600
+# What `git rev-parse --local-env-vars` lists but the configuration, which git itself passes on to the other
+# repositories it runs in: set by a git that runs cyclotron (a hook, an alias), they would make git work in that one.
+_GIT_REPOSITORY_VARIABLES = (
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_CONFIG",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_IMPLICIT_WORK_TREE",
+    "GIT_GRAFT_FILE",
+    "GIT_INDEX_FILE",
+    "GIT_NO_REPLACE_OBJECTS",
+    "GIT_REPLACE_REF_BASE",
+    "GIT_PREFIX",
+    "GIT_SHALLOW_FILE",
+    "GIT_COMMON_DIR",
+)
 
 _REPO = re.compile(r"[\w-][\w.-]*/[\w-][\w.-]*")
 _COMMIT = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
@@ -69,17 +86,23 @@ def _cache_key(commit: str, urdf_filepath: str) -> str:
     return f"{commit}__{urllib.parse.quote(_model_folder(urdf_filepath), safe='')}"
 
 
-def _run_git(cwd: str, *args: str, check: bool = True) -> bool:
-    """Run git in ``cwd``; True when it succeeds. Raises ``RobotModelUnavailable`` when git can't run, or, with
-    ``check``, fails."""
+def _run_git(cwd: str, *args: str, check: bool = True) -> str | None:
+    """Run git in ``cwd``; its output when it succeeds, else None. Raises ``RobotModelUnavailable`` when git can't run,
+    or, with ``check``, fails."""
+    env = {name: value for name, value in os.environ.items() if name not in _GIT_REPOSITORY_VARIABLES}
+    # A repository that asks for credentials (private, or renamed) fails instead of waiting for an answer, also over
+    # ssh, which a url.<base>.insteadOf can turn the URL into.
+    env["GIT_TERMINAL_PROMPT"] = "0"
+    if "GIT_SSH_COMMAND" not in env and "GIT_SSH" not in env:
+        env["GIT_SSH_COMMAND"] = "ssh -o BatchMode=yes"
     try:
-        # A repository that asks for credentials (private, or renamed) fails instead of waiting for an answer.
         result = subprocess.run(
             ["git", "-C", cwd, *args],
+            stdin=subprocess.DEVNULL,
             capture_output=True,
             text=True,
             timeout=GIT_TIMEOUT,
-            env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
+            env=env,
         )
     except OSError as error:
         raise RobotModelUnavailable(f"git can't run ({error.strerror})") from error
@@ -88,7 +111,7 @@ def _run_git(cwd: str, *args: str, check: bool = True) -> bool:
     if result.returncode != 0 and check:
         lines = result.stderr.strip().splitlines()
         raise RobotModelUnavailable(f"git {args[0]}: {lines[-1] if lines else f'exit status {result.returncode}'}")
-    return result.returncode == 0
+    return result.stdout.strip() if result.returncode == 0 else None
 
 
 def _check_fetchable(trained: dict) -> None:
@@ -103,10 +126,14 @@ def _check_fetchable(trained: dict) -> None:
         raise RobotModelUnavailable("the run records no repository to fetch it from")
     if not isinstance(commit, str) or not _COMMIT.fullmatch(commit):
         raise RobotModelUnavailable(f"the run records {commit!r} as its commit, not a full commit hash")
-    # The path is joined to the cache folder, so it must stay inside it.
+    if not isinstance(trained.get("sha256"), str):
+        raise RobotModelUnavailable(f"the run records {trained.get('sha256')!r} as its urdf's sha256")
+    # The path is joined to the cache folder, so it must stay inside it, and given to git, so it can't be an option.
     parts = path.split("/") if isinstance(path, str) else []
     if len(parts) < 3 or any(part in ("", ".", "..") for part in parts):
         raise RobotModelUnavailable(f"its urdf ({path}) isn't in a <folder>/urdf/ folder of its repository")
+    if any(part.startswith("-") or "\0" in part for part in parts):
+        raise RobotModelUnavailable(f"its urdf's path ({path!r}) can't be given to git")
 
 
 def _check_urdf(urdf: str, trained: dict, where: str) -> None:
@@ -117,20 +144,22 @@ def _check_urdf(urdf: str, trained: dict, where: str) -> None:
 
 
 def _fetch(url: str, commit: str, folder: str, staging: str, objects: str | None) -> None:
-    """Check out ``folder`` of ``commit`` from ``url`` into ``staging``, and remove git's own files. A sparse checkout
-    of a partial clone downloads only the commit, its trees, and the files of ``folder`` that the local git object
-    folder ``objects`` doesn't have; nothing when it has them all."""
+    """Check out ``folder`` of ``commit`` from ``url`` into ``staging``, with the files at the repository's root, and
+    remove git's own files. A sparse checkout of a partial clone downloads only the commit, its trees, and the files of
+    ``folder`` and the root that the local git object folder ``objects`` doesn't have; nothing when it has them all."""
     _run_git(staging, "init", "-q")
     if objects:
         # Git's alternates: objects found there are read from there, not downloaded.
         with open(os.path.join(staging, ".git", "objects", "info", "alternates"), "w") as f:
             f.write(objects + "\n")
     # Asked before the remote is a promisor: git would download a missing commit to answer.
-    has_commit = _run_git(staging, "cat-file", "-e", f"{commit}^{{commit}}", check=False)
+    has_commit = _run_git(staging, "cat-file", "-e", f"{commit}^{{commit}}", check=False) is not None
     _run_git(staging, "remote", "add", "origin", url)
     _run_git(staging, "config", "remote.origin.promisor", "true")
     _run_git(staging, "config", "remote.origin.partialclonefilter", "blob:none")
-    _run_git(staging, "sparse-checkout", "set", folder)
+    # Cone mode, git's default only from 2.37 on: the folder and the files at the root.
+    _run_git(staging, "sparse-checkout", "init", "--cone")
+    _run_git(staging, "sparse-checkout", "set", "--", folder)
     if not has_commit:
         _run_git(staging, "fetch", "-q", "--depth=1", "--filter=blob:none", "--no-tags", "origin", commit)
     # Downloads the files of the folder missing locally, in one batch.
@@ -201,14 +230,17 @@ def _local_objects(urdf: str) -> str | None:
     folder = os.path.dirname(urdf)
     if not os.path.isdir(folder):
         return None
-    return _git(folder, "rev-parse", "--path-format=absolute", "--git-path", "objects")
+    # Relative to the folder, unless git keeps it elsewhere (a submodule's); --path-format=absolute needs git 2.31.
+    objects = _run_git(folder, "rev-parse", "--git-path", "objects", check=False)
+    return os.path.realpath(os.path.join(folder, objects)) if objects else None
 
 
 def _supply_hint(trained: dict) -> str:
-    folder = posixpath.basename(_model_folder(trained.get("urdf_filepath") or ""))
+    path, repo, commit = trained.get("urdf_filepath"), trained.get("repo"), trained.get("commit")
+    folder = posixpath.basename(_model_folder(path)) if isinstance(path, str) else ""
     folder = folder if folder not in ("", ".", "..") else "model"
-    if trained.get("repo") and trained.get("commit") and trained.get("dirty") is False:
-        model = f"the {folder} folder of {trained['repo']} @ {_short(trained['commit'])}"
+    if isinstance(repo, str) and isinstance(commit, str) and repo and commit and trained.get("dirty") is False:
+        model = f"the {folder} folder of {repo} @ {_short(commit)}"
     else:
         model = f"the {folder} folder the run was trained with"
     return f"To load it, set {MODEL_DIR_VARIABLE}=<{model}>."
