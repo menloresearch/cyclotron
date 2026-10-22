@@ -197,6 +197,8 @@ def test_publish_uploads_what_the_harness_gives_not_the_folder_bytes(publication
 def test_start_poses_upload_as_json_text_and_score_the_same(tmp_path, monkeypatch):
     monkeypatch.setenv("CYCLOTRON_CACHE_DIR", str(tmp_path / "cache"))
     monkeypatch.setattr(HPV, "prepare", lambda self: None)
+    # No network: whether the commit is public is not what this checks.
+    monkeypatch.setattr(HPV, "fetch_history", lambda self: None)
     directory = tmp_path / "suite"
     shutil.copytree(ROOT / "benchmarks/default", directory)
     (directory / "benchmark.yaml").write_text((directory / "benchmark.yaml").read_text() + "license: bsd-3-clause\n")
