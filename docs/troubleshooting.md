@@ -133,16 +133,22 @@ train a new run on it.
 
 ### "The robot model changed since training" (export, check 10d)
 
-The URDF the current code loads has a different sha256 than the one the run
-was trained on; the warning names both files and their commits. When the
-export didn't stop at 10c, the policy still reaches the same joints with the
-same gains, but the simulated robot (masses, limits, geometry) changed. A
-warning without `--strict`, and the file is tagged `robot_model_check:
-changed`; with `--strict`, and so always with `--share`, it stops. Export with
-the robot model's recorded commit checked out, or, if you know the change
-doesn't matter to the policy, export without `--strict`. A run that records
-neither the robot model's sha256 nor its joints and gains gets a note that
-which joints the actions reach can't be checked.
+The URDF the export loaded has a different sha256 than the one the run was
+trained on; the warning names both files and their commits. Export loads the
+run's own robot model when it can (see
+[The robot model](code-changes-since-training.md#the-robot-model)), so the
+line under the warning says why it didn't: the run records no commit of it,
+its repository had uncommitted changes at training, the fetch failed (offline,
+or the repository moved), a cached copy was edited, or `ASIMOV_1_MODEL_DIR`
+names another model. When the export didn't stop at 10c, the policy still
+reaches the same joints with the same gains, but the simulated robot (masses,
+limits, geometry) changed. A warning without `--strict`, and the file is
+tagged `robot_model_check: changed`; with `--strict`, and so always with
+`--share`, it stops. Supply the model as the line says (`ASIMOV_1_MODEL_DIR`
+set to the run's `sim-model` folder), fetch it again once online, or, if you
+know the change doesn't matter to the policy, export without `--strict`. A run
+that records neither the robot model's sha256 nor its joints and gains gets a
+note that which joints the actions reach can't be checked.
 
 ### "The checkpoint's policy doesn't fit the network the current code builds" (export, check 12)
 

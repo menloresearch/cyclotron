@@ -133,6 +133,10 @@ git submodule absorbgitdirs third_party/asimov-1
 git submodule init third_party/asimov-1
 ```
 
+After a pull that moves the pinned commit, update the checkout, which stays
+sparse, with `git submodule update third_party/asimov-1`; until then training
+uses the model checked out before.
+
 To use a robot model stored elsewhere, set `ASIMOV_1_MODEL_DIR` to a
 `sim-model` directory containing `urdf/asimov_1.urdf`. This is also needed
 for non-editable installs, since the default path is resolved relative to
@@ -141,6 +145,11 @@ this repository's checkout:
 ```bash
 export ASIMOV_1_MODEL_DIR=/path/to/asimov-1/sim-model
 ```
+
+Without it, `--export` and `--play` load the robot model each run was trained
+with, fetching an older one into cyclotron's cache when needed (see
+[The robot model](docs/code-changes-since-training.md#the-robot-model)); with
+it set, they load the model it names, and warn when that isn't the run's.
 
 ### Install this extension
 

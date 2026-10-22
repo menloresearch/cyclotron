@@ -24,7 +24,7 @@ foot friction, zero reset randomization of base pose and velocity, a narrowed
 velocity command range (forward 0.6–0.8 m/s), and a small 5x5 cobblestone-road
 terrain.
 
-Three things to know before loading anything else:
+Four things to know before loading anything else:
 
 - **Checkpoint selection.** Without `--checkpoint`, the latest checkpoint of
   the latest run of the task's experiment is played. Pass `--checkpoint` with
@@ -42,6 +42,14 @@ Three things to know before loading anything else:
   and a changed actor class or activation, which would load the old weights
   but compute something else. Only the actor is loaded; the critic and the
   AMP discriminator are training-only state.
+- **The robot model is the run's.** Play simulates the robot model the run
+  was trained with, fetched into cyclotron's cache by the commit its
+  `code_state.yaml` records when your checkout's differs, and prints
+  `Robot model: sim-model/urdf/asimov_1.urdf @ <commit> (as trained)`; see
+  [The robot model](code-changes-since-training.md#the-robot-model). When it
+  can't be loaded, the current one is, and the robot model warning says why.
+  `--current_robot_model` simulates the current one instead, and a set
+  `ASIMOV_1_MODEL_DIR` the one it names; both warn when it isn't the run's.
 
 ## Configuration
 
@@ -66,6 +74,7 @@ Playback:
 | `--video_length <steps>` | Length of the recorded video in steps. Default: 200. |
 | `--seed <n>` | Seed for the environment (`-1` picks a random one). |
 | `--strict` | Stop, instead of warning, if the code changed since the run was trained. |
+| `--current_robot_model` | Simulate the robot model the current code loads, instead of the one the run was trained with. Warns that the robot model changed (a stop with `--strict`) when they differ. |
 | `--disable_fabric` | Disable fabric and use USD I/O operations. |
 | `--agent <entry point>` | RL agent configuration entry point. Default: `rsl_rl_cfg_entry_point`. |
 
@@ -103,6 +112,14 @@ Watch at real-time speed instead of as fast as the GPU allows:
 ```bash
 ./cyclotron.sh --play \
     --task Asimov1-Velocity-Play-v0 --real-time
+```
+
+Watch a run trained on an older robot model on the one your checkout pins:
+
+```bash
+./cyclotron.sh --play \
+    --task Asimov1-Velocity-AMP-Play-v0 \
+    --load_run 2026-09-30_14-12-03 --current_robot_model
 ```
 
 Run strictly, refusing any code change since the run was trained:

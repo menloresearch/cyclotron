@@ -154,7 +154,10 @@ together with `--load_run <run>`. `--share` takes the run folder itself, so
 there a filename alone is enough. Without it, the latest checkpoint is used. Play runs the checkpoint itself and writes no ONNX; use
 [`--export`](#export-a-policy) for that. Before running, play warns about
 anything that changed in the code since the run was trained; see
-[Code changes since training](docs/code-changes-since-training.md).
+[Code changes since training](docs/code-changes-since-training.md). Play and
+export simulate the robot model the run was trained with, fetched by the
+commit the run records when your checkout's differs
+([details](docs/code-changes-since-training.md#the-robot-model)).
 
 Checkpoints and logs are written to `logs/rsl_rl/<experiment_name>/<run>/`.
 
