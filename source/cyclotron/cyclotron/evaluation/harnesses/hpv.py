@@ -82,13 +82,18 @@ class HPV:
         self._prepared = True
 
     def env(self):
+        from ..runner import DEFAULT_BENCHMARK
+
         env = os.environ.copy()
         owned = cache_root() / "harnesses" / self.name
         temporary = owned / "tmp"
         temporary.mkdir(parents=True, exist_ok=True)
+        # HPV's "New benchmark" starts from cyclotron's own default suite, and nothing HPV
+        # writes lands in its checkout.
         env.update(HPV_CACHE_DIR=str(owned), HPV_POLICY_LIBRARY_DIR=str(owned / "policies"),
                    HPV_POLICY_ROOTS="policies", HPV_BENCHMARK_RESULTS_DIR=str(self.results),
-                   HPV_BENCHMARKS_DIR=str(self.workspaces), TMPDIR=str(temporary))
+                   HPV_BENCHMARKS_DIR=str(self.workspaces), HPV_BENCHMARK_TEMPLATE=str(self.root / DEFAULT_BENCHMARK),
+                   HPV_LOG_DIR=str(owned / "logs"), TMPDIR=str(temporary))
         # No harness operation should ever need Hub credentials.
         env.pop("HF_TOKEN", None)
         env.pop("HUGGING_FACE_HUB_TOKEN", None)

@@ -62,9 +62,10 @@ folder, so a save in HPV's UI changes tracked files. Review them with
 checkout blocks `submit` and `publish`. Bump `version` in `benchmark.yaml` when
 a change can move a score. Like any local folder, its results are local-only.
 
-HPV's **New benchmark** button still starts new suites from HPV's own bundled
-default, not this one. `tests/test_evaluation.py` validates this folder against
-the pinned HPV, so an upgrade that changes the format or protocol fails there.
+HPV's **New benchmark** button starts new suites as a copy of this folder
+(cyclotron sets HPV's `HPV_BENCHMARK_TEMPLATE` to it). `tests/test_evaluation.py`
+validates this folder against the pinned HPV, so an upgrade that changes the
+format or protocol fails there.
 
 ### Scoring protocol 2
 
@@ -179,7 +180,8 @@ Author the benchmark in HPV's existing UI:
 ```
 
 HPV edits and saves that exact folder. New benchmarks created in its UI live
-under `logs/benchmark_workspaces/humanoid-policy-viewer/`. See
+under `logs/benchmark_workspaces/humanoid-policy-viewer/` and start as a copy
+of `benchmarks/default/`. See
 [editing a benchmark](view.md#edit-a-benchmark-in-hpv). Cyclotron does not
 reimplement test creation, task configuration or visualization.
 
@@ -307,7 +309,10 @@ repo and commit. Cached bytes are checked against pinned Git/LFS metadata and
 materialized as real files for the viewer. Writable workspaces are separate;
 opening the same Hub reference preserves edits rather than overwriting them.
 Private repositories use `hf auth login` or `HF_TOKEN`; `HF_ENDPOINT` selects
-the Hub. Local run/view paths do not need Hub authentication.
+the Hub. Local run/view paths do not need Hub authentication. HPV's own files
+(its download cache, temporary policy libraries and the viewer's debug logs)
+go under `harnesses/humanoid-policy-viewer/` in the cyclotron cache, so the
+HPV checkout stays clean.
 
 Adapters live in `source/cyclotron/cyclotron/evaluation/harnesses/`. Add a
 trusted adapter and explicit registry entry/legacy repository alias in

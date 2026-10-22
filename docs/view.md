@@ -78,8 +78,8 @@ and saves directly into that folder. Cyclotron does not replace the editor.
 A test's Environment tab also sets where the robot starts and whether it drops
 and settles first (see [start poses](benchmark.md#start-poses-and-their-hub-form)).
 To start a new benchmark, use the viewer's **New benchmark** UI. New folders
-live under `logs/benchmark_workspaces/humanoid-policy-viewer/` and start from
-HPV's own bundled default.
+live under `logs/benchmark_workspaces/humanoid-policy-viewer/` and start as a
+copy of cyclotron's `benchmarks/default/`.
 
 Without `--benchmark`, the viewer opens cyclotron's default suite,
 `benchmarks/default/`, in place: saving in the UI changes tracked files in this

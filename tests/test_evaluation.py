@@ -303,6 +303,7 @@ def test_cli_help_imports_no_training():
 
 
 def test_child_args_are_local_and_headless(monkeypatch, tmp_path):
+    monkeypatch.setenv("CYCLOTRON_CACHE_DIR", str(tmp_path / "cache"))
     harness = HPV(ROOT)
     execute = Mock()
     monkeypatch.setattr(harness, "execute", execute)
@@ -313,6 +314,9 @@ def test_child_args_are_local_and_headless(monkeypatch, tmp_path):
     assert f"out={tmp_path / 'out'}" in execute.call_args.args[0]
     env = harness.env()
     assert env["HPV_BENCHMARKS_DIR"].startswith(str(ROOT / "logs"))
+    # New benchmarks start from cyclotron's default suite; HPV's debug logs stay out of its checkout.
+    assert env["HPV_BENCHMARK_TEMPLATE"] == str(ROOT / "benchmarks/default")
+    assert env["HPV_LOG_DIR"] == str(tmp_path / "cache/harnesses" / HPV.name / "logs")
     assert "HF_TOKEN" not in env
 
 
