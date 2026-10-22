@@ -1,4 +1,6 @@
 import copy
+import json
+import shutil
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -9,10 +11,12 @@ import yaml
 from huggingface_hub.errors import EntryNotFoundError, HfHubHTTPError, RepositoryNotFoundError
 
 from cyclotron.evaluation import hub, publishing, runner
+from cyclotron.evaluation.harnesses.hpv import HPV
 from cyclotron.evaluation.provenance import file_manifest, read_json, write_json
 
 SHA = "a" * 40
 ROOT = Path(__file__).resolve().parents[1]
+START = {"pos": [0, 0, 0.16], "rot": [0.7071068, 0, -0.7071068, 0], "joint_pos": {".*_knee_joint": 0.6}}
 HARNESS = {"name": "humanoid-policy-viewer", "repo": "https://github.com/menloresearch/humanoid-policy-viewer",
            "protocol": 1, "commit": SHA}
 
@@ -57,7 +61,8 @@ def inspection():
             "tasks": [{"id": "score_v2", "config": "all", "split": "test"}], "scored_hash": "new",
             "card": {"license": "bsd-3-clause", "tags": ["humanoid-policy-viewer"], "configs": []},
             "files": ["benchmark.yaml", "data/flat/test.jsonl"], "errors": [], "problems": [], "public": True,
-            "benchmark_yaml": "name: suite\nversion: 2\nharness:\n  tested_commit: " + SHA + "\n"}
+            "publish_files": {"benchmark.yaml": "name: suite\nversion: 2\nharness:\n  tested_commit: " + SHA + "\n",
+                              "data/flat/test.jsonl": json.dumps({"id": "flat/a", "start": json.dumps(START)}) + "\n"}}
 
 
 def test_version_guard(inspection):
@@ -156,15 +161,59 @@ def test_publish_requires_custom_license_in_upload(publication, included):
     inspection["card"].update(license="other", license_link="LICENSE.txt")
     (directory / "LICENSE.txt").write_text("Custom license terms.\n")
     if included:
-        inspection["files"].append("LICENSE.txt")
+        inspection["publish_files"]["LICENSE.txt"] = "Custom license terms.\n"
         result = publishing.publish(ROOT, directory, "org/suite", create=True, dry_run=True, api=api)
-        assert result["files"]["LICENSE.txt"] == b"Custom license terms.\n"
+        assert result["files"]["LICENSE.txt"] == "Custom license terms.\n"
     else:
         with pytest.raises(ValueError, match="publishable license filename"):
             publishing.publish(ROOT, directory, "org/suite", create=True, dry_run=True, api=api)
     api.create_repo.assert_not_called()
     api.create_commit.assert_not_called()
     api.create_tag.assert_not_called()
+
+
+def test_publish_uploads_what_the_harness_gives_not_the_folder_bytes(publication):
+    directory, harness, api = publication
+    api.repo_info.side_effect = [http_error(404, RepositoryNotFoundError), SimpleNamespace(sha=SHA)]
+    api.create_commit.return_value = SimpleNamespace(pr_url="https://hub/pr/1", commit_url=None, oid="b" * 40)
+    publishing.publish(ROOT, directory, "org/suite", create=True, pr=True, api=api)
+    uploaded = {op.path_in_repo: op.path_or_fileobj for op in api.create_commit.call_args.kwargs["operations"]}
+    published = harness.inspect_benchmark.return_value["publish_files"]
+    assert uploaded["benchmark.yaml"] == published["benchmark.yaml"].encode()
+    assert uploaded["data/flat/test.jsonl"] == published["data/flat/test.jsonl"].encode()
+    assert uploaded["data/flat/test.jsonl"] != (directory / "data/flat/test.jsonl").read_bytes()
+    assert {"eval.yaml", "README.md"} <= set(uploaded)
+
+
+@pytest.mark.skipif(not shutil.which("node") or not (ROOT / "third_party/humanoid-policy-viewer/node_modules/yaml").is_dir(),
+                    reason="needs node and the harness's npm dependencies")
+def test_start_poses_upload_as_json_text_and_score_the_same(tmp_path, monkeypatch):
+    monkeypatch.setenv("CYCLOTRON_CACHE_DIR", str(tmp_path / "cache"))
+    monkeypatch.setattr(HPV, "prepare", lambda self: None)
+    directory = tmp_path / "suite"
+    shutil.copytree(ROOT / "benchmarks/default", directory)
+    (directory / "benchmark.yaml").write_text((directory / "benchmark.yaml").read_text() + "license: bsd-3-clause\n")
+    # Locally HPV's editor writes a start pose as an object; the card declares the column a string.
+    rows = directory / "data/locomotion/test.jsonl"
+    lines = rows.read_text().splitlines()
+    lines[0] = json.dumps({**json.loads(lines[0]), "start": START})
+    rows.write_text("\n".join(lines) + "\n")
+    api = Mock(endpoint="https://huggingface.co")
+    api.repo_info.side_effect = http_error(404, RepositoryNotFoundError)
+    files = publishing.publish(ROOT, directory, "org/suite", create=True, dry_run=True, api=api)["files"]
+    uploaded = [json.loads(line) for line in files["data/locomotion/test.jsonl"].splitlines()]
+    assert isinstance(uploaded[0]["start"], str) and json.loads(uploaded[0]["start"]) == START
+    assert uploaded[1:] == [json.loads(line) for line in lines[1:]]
+    api.create_commit.assert_not_called()
+    # Read back in its Hub form, the benchmark is the same scored content as the local folder.
+    published = tmp_path / "published"
+    for name, text in files.items():
+        (published / name).parent.mkdir(parents=True, exist_ok=True)
+        (published / name).write_text(text)
+    harness = HPV(ROOT)
+    local, hub_form = harness.inspect_benchmark(directory), harness.inspect_benchmark(published)
+    assert not local["errors"] and not hub_form["errors"]
+    assert hub_form["scored_hash"] == local["scored_hash"]
 
 
 def test_publish_refuses_concurrent_ui_edit(publication):

@@ -142,6 +142,8 @@ class HPV:
         self.execute(["scripts/benchmark.mjs", "view", directory, *self.headless_options(options)])
 
     def inspect_benchmark(self, directory, commit=None):
+        # Cyclotron's offline bridge. HPV's own `inspect` command (schema hpv-inspection/1, the
+        # same fields) can replace it here: only this command and the schema name change.
         args = [self.root / "scripts/harnesses/hpv-inspect.mjs", self.path, "inspect", directory]
         if commit:
             args.append(commit)

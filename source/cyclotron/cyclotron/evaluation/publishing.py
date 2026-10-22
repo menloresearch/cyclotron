@@ -7,7 +7,7 @@ from pathlib import Path
 import yaml
 
 from .harnesses.base import select_harness
-from .hub import cache_root, commit_files, download, hub_api, parse_reference
+from .hub import cache_root, commit_files, download, hub_api, parse_reference, safe_name
 from .provenance import file_manifest, git_state
 
 
@@ -132,13 +132,13 @@ def publish(root, directory, repo_id, base=None, create=False, pr=False, dry_run
         old_inspection = harness.inspect_benchmark(previous) if previous else None
         version_check(inspection, old_inspection)
         generated = hub_files(inspection, staged, previous, harness=harness.task_harness(inspection, state["commit"]))
-        files = {name: (staged / name).read_bytes() for name in inspection["files"] if name != "README.md"}
+        # The harness gives each file as published (benchmark.yaml with the tested commit, rows in
+        # the column types the card declares), read from the staged copy checked above.
+        files = {safe_name(name): text for name, text in inspection["publish_files"].items()}
         files.update(generated)
         license_link = inspection["card"].get("license_link")
         if license_link and license_link not in files:
             raise ValueError("Use a publishable license filename, such as LICENSE or LICENSE.txt")
-        if inspection["benchmark_yaml"]:
-            files["benchmark.yaml"] = inspection["benchmark_yaml"]
         deletions = []
         if previous:
             deletions = sorted(set(harness.dataset_files(list(file_manifest(previous)))) - set(files))
