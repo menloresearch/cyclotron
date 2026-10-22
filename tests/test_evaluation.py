@@ -3,8 +3,10 @@
 import copy
 import hashlib
 import json
+import os
 import subprocess
 import sys
+from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -70,6 +72,18 @@ def test_view_known_options():
     assert policies == ["org/first"] and words == ["port=4321", "no-open"]
     with pytest.raises(ValueError, match="Run options"):
         parse_run(["org/first", "jobs=2"], viewing=True)
+
+
+def test_view_takes_several_policies_and_folders(tmp_path):
+    (tmp_path / "runs").mkdir()
+    (tmp_path / "suite").mkdir()
+    (tmp_path / "suite/benchmark.yaml").write_text("name: test")
+    _, policies, benchmark, _ = parse_run(
+        ["org/first", str(tmp_path / "runs"), str(tmp_path / "suite"), "policy=org/second", "--revision", "v1"], viewing=True)
+    assert policies == ["org/first", str(tmp_path / "runs"), "org/second"]
+    assert benchmark == str(tmp_path / "suite")
+    with pytest.raises(SystemExit):
+        parse_run([str(tmp_path / "suite")], viewing=True)
 
 
 def test_adapter_registry(monkeypatch):
@@ -308,8 +322,9 @@ def test_child_args_are_local_and_headless(monkeypatch, tmp_path):
     execute = Mock()
     monkeypatch.setattr(harness, "execute", execute)
     monkeypatch.setenv("SSH_CONNECTION", "test")
-    harness.view(str(tmp_path / "policy"), str(tmp_path / "suite"), [])
-    assert execute.call_args.args[0] == ["scripts/hf.mjs", str(tmp_path / "policy"), f"benchmark={tmp_path / 'suite'}", "no-open"]
+    harness.view([str(tmp_path / "a"), str(tmp_path / "b")], str(tmp_path / "suite"), [])
+    assert execute.call_args.args[0] == ["scripts/hf.mjs", f"policy={tmp_path / 'a'}", f"policy={tmp_path / 'b'}",
+                                         f"benchmark={tmp_path / 'suite'}", "no-open"]
     harness.run([str(tmp_path / "policy")], str(tmp_path / "suite"), tmp_path / "out", ["jobs=2"])
     assert f"out={tmp_path / 'out'}" in execute.call_args.args[0]
     env = harness.env()
@@ -320,6 +335,66 @@ def test_child_args_are_local_and_headless(monkeypatch, tmp_path):
     assert "HF_TOKEN" not in env
 
 
+@pytest.fixture
+def run_tree(tmp_path):
+    """logs/rsl_rl-like runs: exported and not, nested experiments, and files that are no run."""
+    root = tmp_path / "rsl_rl"
+    def run(name, *files):
+        folder = root / name
+        for file in files:
+            (folder / file).parent.mkdir(parents=True, exist_ok=True)
+            (folder / file).write_text("x")
+        return folder
+    exported = ("model_10.pt", "exported/policy.onnx", "exported/env.yaml")
+    old = run("walk/2026-10-01_10-00-00_first", *exported)
+    nested = run("walk/sweep/2026-10-02_10-00-00", *exported)
+    undated = run("custom/hand-named", "exported/policy.onnx", "exported/env.yaml")
+    unexported = run("walk/2026-10-03_10-00-00", "model_5.pt", "params/env.yaml")
+    no_env = run("walk/2026-10-04_10-00-00_no_env", "model_5.pt", "exported/policy.onnx")
+    run("misc", "stray.onnx")
+    run(".hidden/2026-10-09_10-00-00", *exported)
+    # A run name without a timestamp falls back to the folder's mtime: here between the others.
+    stamp = datetime(2026, 10, 1, 12).timestamp()
+    os.utime(undated, (stamp, stamp))
+    return root, [nested, undated, old], [no_env, unexported]
+
+
+def test_find_runs_newest_first(run_tree):
+    root, exported, unexported = run_tree
+    assert runner.find_runs(root) == (exported, unexported)
+    # A single run folder is its own run.
+    assert runner.find_runs(exported[0]) == ([exported[0]], [])
+
+
+def test_folder_of_runs_summary_and_errors(run_tree, capsys):
+    root, exported, unexported = run_tree
+    assert runner.exported_runs("logs", root) == [run / "exported" for run in exported]
+    out = capsys.readouterr().out
+    assert out.startswith("Found 5 runs under logs: 3 exported, 2 not (export them with ./cyclotron.sh --export")
+    assert "Not exported: walk/2026-10-04_10-00-00_no_env, walk/2026-10-03_10-00-00\n" in out
+    with pytest.raises(ValueError, match="No exported runs under walk: 1 not exported"):
+        runner.exported_runs("walk", unexported[1])
+    with pytest.raises(ValueError, match="holds no exported runs"):
+        runner.exported_runs("misc", root / "misc")
+
+
+def test_view_passes_every_policy_in_one_call(monkeypatch, run_tree):
+    root, exported, _ = run_tree
+    monkeypatch.setattr(HPV, "prepare", lambda self: None)
+    # Hub policies are resolved by cyclotron; --revision pins the first of them only.
+    monkeypatch.setattr(runner, "resolve_input", lambda word, kind, select, revision: {"path": f"/cache/{word}@{revision}"})
+    execute = Mock()
+    monkeypatch.setattr(HPV, "execute", lambda self, args: execute(args))
+    monkeypatch.setenv("SSH_CONNECTION", "test")
+    policy = exported[1] / "exported"
+    runner.view(ROOT, [str(policy), "org/first", str(root), "org/second"], revision="v1", options=["port=3131"])
+    assert execute.call_args.args[0] == [
+        "scripts/hf.mjs", f"policy={policy}", "policy=/cache/org/first@v1",
+        *(f"policy={run / 'exported'}" for run in exported), "policy=/cache/org/second@None",
+        f"benchmark={ROOT / 'benchmarks/default'}", "port=3131", "no-open",
+    ]
+
+
 def test_default_benchmark_is_cyclotrons_own_and_opens_in_place(monkeypatch, tmp_path):
     monkeypatch.setattr(HPV, "prepare", lambda self: None)
     harness, item = runner.resolve_benchmark(ROOT, None)
@@ -328,9 +403,9 @@ def test_default_benchmark_is_cyclotrons_own_and_opens_in_place(monkeypatch, tmp
     monkeypatch.setattr(runner, "resolve_input", lambda *a: {"path": str(tmp_path / "policy")})
     monkeypatch.setattr(runner, "working_copy", Mock(side_effect=AssertionError("the default was copied")))
     opened = Mock()
-    monkeypatch.setattr(HPV, "view", lambda self, policy, benchmark, options: opened(benchmark))
-    runner.view(ROOT, "org/model")
-    opened.assert_called_once_with(str(ROOT / "benchmarks/default"))
+    monkeypatch.setattr(HPV, "view", lambda self, policies, benchmark, options: opened(policies, benchmark))
+    runner.view(ROOT, ["org/model"])
+    opened.assert_called_once_with([str(tmp_path / "policy")], str(ROOT / "benchmarks/default"))
 
 
 @pytest.mark.skipif(not __import__("shutil").which("node")

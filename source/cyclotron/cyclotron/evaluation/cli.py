@@ -11,7 +11,8 @@ FLAG_OPTIONS = ("no-open", "force", "watch", "verbose")
 
 def parse_run(argv, viewing=False):
     parser = argparse.ArgumentParser(
-        description="View/edit a benchmark in its harness." if viewing else "Run a local or Hugging Face benchmark.",
+        description="View policies, or every exported run in a folder, and edit a benchmark in the harness."
+        if viewing else "Run a local or Hugging Face benchmark.",
         epilog="Known --flags and HPV key=value words are accepted. Unknown harness options pass through. "
                "Benchmark actions: view, submit, publish, release. No uploads occur during a run.",
         allow_abbrev=False,
@@ -62,8 +63,8 @@ def parse_run(argv, viewing=False):
         else:
             policies.append(word)
     policies.extend(args.policy or [])
-    if not policies or viewing and len(policies) != 1:
-        parser.error("Give one policy to view" if viewing else "Give at least one policy to benchmark")
+    if not policies:
+        parser.error(f"Give at least one policy to {'view' if viewing else 'benchmark'}")
     if viewing and (args.out or any(getattr(args, name) for name in ("tests", "repeats", "jobs", "robots", "shard", "force", "watch"))):
         raise ValueError("Run options belong to --benchmark, not --view")
     options = [f"{name}={getattr(args, name)}" for name in ("port", "tests", "repeats", "jobs", "robots", "shard") if getattr(args, name)]
@@ -122,7 +123,7 @@ def main(root, argv=None, viewing=False):
     from .runner import run, view
 
     if viewing:
-        return view(root, policies[0], benchmark, args.harness, args.revision, options)
+        return view(root, policies, benchmark, args.harness, args.revision, options)
     return run(root, policies, benchmark, args.harness, args.revision, args.out, options)
 
 

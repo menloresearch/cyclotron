@@ -1,16 +1,18 @@
 """Resolve inputs once, then hand the selected harness local paths only."""
 
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 
 import yaml
 
 from .harnesses.base import select_harness
-from .hub import resolve_input, working_copy
+from .hub import local_path, resolve_input, working_copy
 from .provenance import SCHEMA, file_manifest, git_state, read_json, sha256, write_json
 
 # Cyclotron's own default suite, maintained in this repository rather than read from a harness.
 DEFAULT_BENCHMARK = "benchmarks/default"
+EXPORT_HINT = "./cyclotron.sh --export --checkpoint <run>/model_<n>.pt"
 
 
 def resolve_benchmark(root, target, harness_name=None):
@@ -35,14 +37,68 @@ def resolve_benchmark(root, target, harness_name=None):
     return adapter, item
 
 
-def view(root, policy, benchmark=None, harness_name=None, revision=None, options=()):
+def find_runs(directory):
+    """Training runs below `directory`, newest first: those exported (<run>/exported/ holding
+    policy.onnx and env.yaml, as --export writes it) and those not."""
+    runs = {}
+    for folder, subfolders, files in os.walk(directory):
+        folder = Path(folder)
+        subfolders[:] = [name for name in subfolders if not name.startswith(".") and name not in ("exported", "node_modules")]
+        export = folder / "exported"
+        if export.is_dir() or any(name.startswith("model_") and name.endswith(".pt") for name in files):
+            runs[folder] = (export / "policy.onnx").is_file() and (export / "env.yaml").is_file()
+
+    def started(run):
+        # rsl_rl names a run after the time it started: 2026-10-22_09-30-00[_<run_name>].
+        try:
+            return datetime.strptime(run.name[:19], "%Y-%m-%d_%H-%M-%S").timestamp()
+        except ValueError:
+            return run.stat().st_mtime
+
+    ordered = sorted(runs, key=lambda run: (started(run), str(run)), reverse=True)
+    return [run for run in ordered if runs[run]], [run for run in ordered if not runs[run]]
+
+
+def exported_runs(word, directory):
+    """The exported policies of a folder of training runs, newest first, after a summary."""
+    exported, unexported = find_runs(directory)
+
+    def names(runs):
+        shown = [run.relative_to(directory).as_posix() if run != directory else run.name for run in runs[:3]]
+        return ", ".join(shown) + (f" and {len(runs) - 3} more" if len(runs) > 3 else "")
+
+    if not exported:
+        if unexported:
+            raise ValueError(f"No exported runs under {word}: {len(unexported)} not exported ({names(unexported)}); "
+                             f"export them with {EXPORT_HINT}")
+        raise ValueError(f"{word} is not a policy and holds no exported runs (<run>/exported/ with policy.onnx and env.yaml)")
+    total = len(exported) + len(unexported)
+    print(f"Found {total} run{'s' * (total != 1)} under {word}: {len(exported)} exported"
+          + (f", {len(unexported)} not (export them with {EXPORT_HINT})" if unexported else ""))
+    if unexported:
+        print(f"  Not exported: {names(unexported)}")
+    return [run / "exported" for run in exported]
+
+
+def view(root, policies, benchmark=None, harness_name=None, revision=None, options=()):
     harness, dataset = resolve_benchmark(root, benchmark, harness_name)
-    model = resolve_input(policy, "model", harness.model_files, revision)
+    folders = []
+    for word in policies:
+        path = local_path(word, policy=True)
+        if path is None:
+            # --revision pins the first Hub policy only, as for --benchmark.
+            folders.append(resolve_input(word, "model", harness.model_files, revision)["path"])
+            revision = None
+        elif path.is_dir() and not any(child.is_file() and child.suffix.lower() == ".onnx" for child in path.iterdir()):
+            # Not a policy itself: a folder of training runs, such as logs/rsl_rl.
+            folders.extend(str(folder) for folder in exported_runs(word, path))
+        else:
+            folders.append(str(path))
     # The pinned Hub cache is never edited; local folders, the default included, are edited in place.
     directory = dataset["path"]
     if dataset["source"] == "hub":
         directory = working_copy(dataset, harness.workspaces)
-    return harness.view(model["path"], str(directory), options)
+    return harness.view(folders, str(directory), options)
 
 
 def run(root, policies, benchmark=None, harness_name=None, revision=None, output=None, options=()):

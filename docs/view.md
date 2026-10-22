@@ -21,6 +21,13 @@ Or view a run you exported with [`--export`](export.md):
 ./cyclotron.sh --view logs/rsl_rl/<experiment_name>/<run>
 ```
 
+Or every exported run at once, the newest selected, to compare them in one
+viewer:
+
+```bash
+./cyclotron.sh --view logs/rsl_rl
+```
+
 Requirements are Python 3.10+ with `pip install -r requirements-eval.txt`
 and [Node.js](https://nodejs.org) 20 or newer with npm. No training environment
 is needed; see [standalone installation](../INSTALL.md#viewing-and-benchmarking-only-optional).
@@ -35,12 +42,13 @@ velocity and push the robot.
 
 ## Configuration
 
-`--view` takes one argument, the policy, in two forms:
+`--view` takes one or more policies, in these forms:
 
 | Argument | What runs |
 | --- | --- |
 | `<org>/<model>[@revision]` | A Hub repo, for example one uploaded with [`--share`](share.md). Cyclotron resolves its commit and downloads the ONNX and configuration files into its cache, then passes a local path to HPV. |
 | A local path | Runs in place, with no download: a run folder (its `exported/`, written by [`--export`](export.md)), any folder holding `policy.onnx` and `env.yaml`, or an `.onnx` file. |
+| A folder of runs | Every exported run below it, such as `logs/rsl_rl` or `logs/rsl_rl/<experiment_name>`: each `<run>/exported/` holding `policy.onnx` and `env.yaml`. |
 
 A run folder argument descends into `<run>/exported` when the folder itself
 has no top-level `.onnx`, so for a fresh run, run `--export` first. A folder
@@ -48,11 +56,25 @@ without `env.yaml` next to the `.onnx` is refused: the viewer will not guess
 the policy's gains. The policy's inputs, gains, action scale, default pose and
 torque limits all come from `env.yaml`.
 
-Options after the argument:
+All the policies go into the viewer's policy list, each labelled by the
+shortest end of its path that tells it apart (`<run>/exported` for runs), and
+the first one is selected. A folder that is not a policy itself is searched
+for runs, newest first by the timestamp that starts a run's folder name (or
+the folder's modification time), so the newest run is selected. Cyclotron
+prints what it found, naming a few runs that have no export yet:
+
+```text
+Found 12 runs under logs/rsl_rl: 9 exported, 3 not (export them with ./cyclotron.sh --export --checkpoint <run>/model_<n>.pt)
+  Not exported: asimov/2026-10-21_09-12-40, asimov/2026-10-20_17-03-11 and 1 more
+```
+
+A folder with no exported run is an error that says so.
+
+Options after the policies:
 
 | Flag | Meaning |
 | --- | --- |
-| `--revision <ref>` | Branch, tag or commit of a Hub repo (default: `main`). Ignored for local paths. |
+| `--revision <ref>` | Branch, tag or commit of the first Hub policy given (default: `main`). Other policies use `@<ref>`. |
 | `--port <n>` | Dev server port (default: 3000, or the next free one). |
 | `--no-open` | Do not open a browser window. Added automatically over SSH or without a display. |
 | `--benchmark <folder or datasets/org/name[@rev]>` | Open this benchmark in HPV's existing editor (default: cyclotron's `benchmarks/default`). A local folder is edited in place; a Hub dataset gets a separate writable copy. |
@@ -145,6 +167,15 @@ Run the exact version you mean, not whatever `main` points to today:
 
 ```bash
 ./cyclotron.sh --view <org>/<model> --revision v1.2
+```
+
+### Comparing policies
+
+Give several policies, from the Hub or on disk, and switch between them in
+the viewer's policy list; the first is selected:
+
+```bash
+./cyclotron.sh --view logs/rsl_rl/<experiment_name> <org>/<model>@v1.2
 ```
 
 ### A private repo

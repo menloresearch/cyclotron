@@ -276,6 +276,7 @@ no Isaac Sim, torch or GPU. See [standalone installation](INSTALL.md#viewing-and
 ```bash
 ./cyclotron.sh --view <org>/<model>                                   # from the Hub
 ./cyclotron.sh --view logs/rsl_rl/<experiment_name>/<run>             # from --export
+./cyclotron.sh --view logs/rsl_rl                                     # every exported run
 ```
 
 On the first run this fetches the `third_party/humanoid-policy-viewer`
@@ -291,8 +292,14 @@ policy), any folder holding `policy.onnx` and `env.yaml`, or an `.onnx` file.
 For a run folder, run `--export` first. A folder without `env.yaml` next to
 the `.onnx` is refused: the viewer will not guess the policy's gains.
 
-Options: `--revision <ref>` (branch, tag or commit), `--port <n>` (default
-3000), `--no-open`, `--harness <name>` and `--benchmark <folder or dataset>`.
+Give several policies to switch between them in the viewer; the first is
+selected. A folder of runs, such as `logs/rsl_rl`, stands for every exported
+run below it, newest first, so the newest is selected; cyclotron prints how
+many runs it found and names a few that still need `--export`.
+
+Options: `--revision <ref>` (branch, tag or commit of the first Hub policy),
+`--port <n>` (default 3000), `--no-open`, `--harness <name>` and
+`--benchmark <folder or dataset>`.
 Private or gated repos use `hf auth login` or `HF_TOKEN`. HPV keeps the full
 benchmark editing UI; cyclotron supplies the working folder and publishes it.
 

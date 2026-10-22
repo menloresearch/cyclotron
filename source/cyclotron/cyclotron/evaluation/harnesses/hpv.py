@@ -139,8 +139,10 @@ class HPV:
                 words.append("no-open")
         return words
 
-    def view(self, policy, benchmark, options):
-        self.execute(["scripts/hf.mjs", policy, f"benchmark={benchmark}", *self.headless_options(options)])
+    def view(self, policies, benchmark, options):
+        # HPV lists every policy, labelled by its shortest distinguishing path, and selects the first.
+        words = [f"policy={policy}" for policy in policies]
+        self.execute(["scripts/hf.mjs", *words, f"benchmark={benchmark}", *self.headless_options(options)])
 
     def run(self, policies, benchmark, output, options):
         self.execute(["scripts/benchmark.mjs", *policies, benchmark, f"out={output}", *options])
