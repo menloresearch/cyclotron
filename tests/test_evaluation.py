@@ -150,7 +150,7 @@ def fake_hub(tmp_path, monkeypatch):
         blob = hashlib.sha1(f"blob {len(data)}\0".encode() + data).hexdigest()
         siblings.append(SimpleNamespace(rfilename=name, blob_id=blob, lfs=None))
     api = Mock(endpoint="https://huggingface.co", token=None)
-    api.repo_info.return_value = SimpleNamespace(sha=SHA, siblings=siblings)
+    api.repo_info.return_value = SimpleNamespace(id="org/model", sha=SHA, siblings=siblings)
     fetch = Mock(return_value=str(source))
     monkeypatch.setattr("huggingface_hub.snapshot_download", fetch)
     return api, fetch
@@ -171,6 +171,25 @@ def test_cache_pins_verifies_and_materializes(fake_hub):
     (Path(item["path"]) / "policy.onnx").write_bytes(b"edited")
     with pytest.raises(ValueError, match="verify pinned"):
         hub.download(reference, HPV.model_files, api)
+
+
+def test_cache_keeps_the_hubs_repo_id_and_literal_filenames(fake_hub):
+    from huggingface_hub.utils import filter_repo_objects
+
+    api, fetch = fake_hub
+    source = Path(fetch.return_value)
+    # snapshot_download glob-matches allow_patterns; these names must still download as themselves.
+    for name in ("policy[1].onnx", "policy*?.onnx"):
+        (source / name).write_bytes(b"other")
+        blob = hashlib.sha1(b"blob 5\0other").hexdigest()
+        api.repo_info.return_value.siblings.append(SimpleNamespace(rfilename=name, blob_id=blob, lfs=None))
+    # Provenance records the Hub's spelling of the repo, not the user's.
+    item = hub.download({"id": "ORG/Model", "revision": "main", "repo_type": "model"}, HPV.model_files, api)
+    assert item["id"] == "org/model" and Path(item["path"]).name == "org__model"
+    names = ["policy.onnx", "policy1.onnx", "policyab.onnx", "policy[1].onnx", "policy*?.onnx"]
+    selected = list(filter_repo_objects(names, allow_patterns=fetch.call_args.kwargs["allow_patterns"]))
+    assert selected == ["policy.onnx", "policy[1].onnx", "policy*?.onnx"]
+    assert {"policy[1].onnx", "policy*?.onnx"} <= set(item["files"])
 
 
 def test_endpoint_caches_do_not_collide(fake_hub):

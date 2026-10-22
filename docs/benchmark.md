@@ -305,8 +305,10 @@ Local editing/runs and metadata dry-runs work independently; the Hub may reject
 
 `CYCLOTRON_CACHE_DIR` overrides `~/.cache/cyclotron/` (which otherwise honors
 `XDG_CACHE_HOME`). Hub snapshots are separated by endpoint, repository type,
-repo and commit. Cached bytes are checked against pinned Git/LFS metadata and
-materialized as real files for the viewer. Writable workspaces are separate;
+repo and commit, and recorded under the Hub's own spelling of the repo ID (its
+case, or its new name after a rename), not the one typed. Cached bytes are
+checked against pinned Git/LFS metadata and materialized as real files for the
+viewer, filenames containing `[`, `*` or `?` included. Writable workspaces are separate;
 opening the same Hub reference preserves edits rather than overwriting them.
 Private repositories use `hf auth login` or `HF_TOKEN`; `HF_ENDPOINT` selects
 the Hub. Local run/view paths do not need Hub authentication. HPV's own files

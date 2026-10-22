@@ -1,5 +1,6 @@
 """Cyclotron's Hub transport and immutable, real-file input cache."""
 
+import glob
 import hashlib
 import os
 import re
@@ -22,6 +23,15 @@ def hub_api():
     return HfApi(endpoint=os.environ.get("HF_ENDPOINT", "https://huggingface.co").rstrip("/"))
 
 
+REPO_ID = r"[A-Za-z0-9][A-Za-z0-9_.-]*/[A-Za-z0-9][A-Za-z0-9_.-]*"
+
+
+def check_repo_id(repo_id):
+    if not isinstance(repo_id, str) or not re.fullmatch(REPO_ID, repo_id) or ".." in repo_id or "--" in repo_id:
+        raise ValueError(f"Invalid repository ID: {repo_id}")
+    return repo_id
+
+
 def parse_reference(text, repo_type="model", revision=None):
     """Parse an explicit Hub input; local-path detection happens before this."""
     if "://" in text:
@@ -38,10 +48,9 @@ def parse_reference(text, repo_type="model", revision=None):
     if text.startswith("datasets/"):
         repo_type, text = "dataset", text[len("datasets/"):]
     repo_id, separator, embedded = text.partition("@")
-    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*/[A-Za-z0-9][A-Za-z0-9_.-]*", repo_id):
+    if not re.fullmatch(REPO_ID, repo_id):
         raise ValueError(f"Expected an existing local path or org/repo[@revision], got {text!r}")
-    if ".." in repo_id or "--" in repo_id:
-        raise ValueError(f"Invalid repository ID: {repo_id}")
+    check_repo_id(repo_id)
     if separator and (not embedded or (revision and revision != embedded)):
         raise ValueError("Empty or conflicting revisions")
     return {"id": repo_id, "repo_type": repo_type, "revision": embedded or revision or "main"}
@@ -108,6 +117,8 @@ def download(reference, select_files, api=None):
     sha = info.sha
     if not re.fullmatch(r"[a-fA-F0-9]{40,64}", sha or ""):
         raise ValueError("Hub did not return a pinned commit")
+    # Record the Hub's own spelling of the repo (its case, or its new name after a rename), not the user's.
+    reference = {**reference, "id": check_repo_id(info.id)}
     siblings = {s.rfilename: s for s in info.siblings}
     names = sorted(safe_name(n) for n in select_files(list(siblings)))
     if not names:
@@ -135,7 +146,7 @@ def download(reference, select_files, api=None):
                 staging = Path(temporary) / "files"
                 source = Path(snapshot_download(
                     repo_id=reference["id"], repo_type=reference["repo_type"], revision=sha,
-                    endpoint=endpoint, token=api.token, allow_patterns=names,
+                    endpoint=endpoint, token=api.token, allow_patterns=[glob.escape(name) for name in names],
                     cache_dir=cache_root() / "hf-downloads" / endpoint_key,
                 ))
                 for name in names:
