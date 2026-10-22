@@ -244,7 +244,7 @@ without uploading.
 ./cyclotron.sh --benchmark submit <result-directory> --dry-run
 ```
 
-Results live in `logs/benchmarks/<app>/<timestamp>/`: HPV's `result.json`
+Results live in `logs/benchmarks/<harness>/<timestamp>/`: HPV's `result.json`
 and `report.html`, plus cyclotron's input/revision provenance. Runs using
 local folders remain local-only; submission requires pinned Hub model and
 benchmark inputs, clean code and a complete unmodified suite.
@@ -292,7 +292,7 @@ For a run folder, run `--export` first. A folder without `env.yaml` next to
 the `.onnx` is refused: the viewer will not guess the policy's gains.
 
 Options: `--revision <ref>` (branch, tag or commit), `--port <n>` (default
-3000), `--no-open`, `--app <name>` and `--benchmark <folder or dataset>`.
+3000), `--no-open`, `--harness <name>` and `--benchmark <folder or dataset>`.
 Private or gated repos use `hf auth login` or `HF_TOKEN`. HPV keeps the full
 benchmark editing UI; cyclotron supplies the working folder and publishes it.
 

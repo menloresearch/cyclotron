@@ -1,7 +1,8 @@
 # Benchmarking and publication
 
 Cyclotron owns Hugging Face access, input storage, provenance and publication.
-The selected app owns simulation, scoring and its editing UI. The first app is
+The selected harness owns simulation, scoring and its editing UI. The first
+harness is
 [humanoid-policy-viewer (HPV)](https://github.com/menloresearch/humanoid-policy-viewer).
 It receives local paths only, even when you specify Hub repositories.
 
@@ -9,7 +10,7 @@ It receives local paths only, even when you specify Hub repositories.
 
 Use Python 3.10+ and `pip install -r requirements-eval.txt`, plus Node.js 20+
 with npm for HPV. No Isaac Lab, torch, GPU or full training install is needed.
-Cyclotron automatically fetches the pinned app and npm dependencies. HPV
+Cyclotron automatically fetches the pinned harness and npm dependencies. HPV
 fetches its robot assets and installs Playwright Chromium on the first run.
 Node itself and system libraries are not installed automatically.
 See [installation](../INSTALL.md#viewing-and-benchmarking-only-optional).
@@ -65,7 +66,7 @@ HPV's **New benchmark** button still starts new suites from HPV's own bundled
 default, not this one. `tests/test_evaluation.py` validates this folder against
 the pinned HPV, so an upgrade that changes the format or protocol fails there.
 
-### Options and app selection
+### Options and harness selection
 
 Known dashed flags are translated into HPV's words-only CLI; its word syntax
 also works. For example, `--jobs 2` and `jobs=2` are equivalent.
@@ -80,16 +81,16 @@ also works. For example, `--jobs 2` and `jobs=2` are equivalent.
 | `--tests`, `--repeats`, `--force` | Local experimentation; blocks submission |
 | `--shard i/n` | Partial run; cyclotron does not yet finalize merged provenance |
 | `--watch`, `--verbose` | HPV display/debug options |
-| `--app <name>` | Explicit registered app; `CYCLOTRON_APP` is an alternative |
+| `--harness <name>` | Explicit registered harness; `CYCLOTRON_HARNESS` is an alternative |
 
-App selection otherwise follows the `harness` that a published benchmark's
+Harness selection otherwise follows the `harness` that a published benchmark's
 `eval.yaml` tasks name (see [the harness block](#the-harness-in-evalyaml)), then
-`harness.app` or a recognized `harness.repo` in `benchmark.yaml`. Legacy HPV
+`harness.name` or a recognized `harness.repo` in `benchmark.yaml`. Legacy HPV
 repository identities still work. Conflicting
-selections and unknown apps are rejected. Dataset URLs never install plugins.
-Saved results use their recorded app.
+selections and unknown harnesses are rejected. Dataset URLs never install plugins.
+Saved results use their recorded harness.
 
-Unknown options are passed to the app for validation, including after `--`.
+Unknown options are passed to the harness for validation, including after `--`.
 Put positional inputs before `--`; cyclotron must resolve all inputs. Reserved
 `policy=`, `benchmark=` and `out=` aliases are intercepted even after the
 separator, and conflicting duplicate options are errors. HPV will reject
@@ -121,8 +122,8 @@ Submission requires:
 - A complete cyclotron-generated manifest, unchanged result and matching inputs.
 - Both policy and dataset resolved from the Hub at immutable commits; local
   working folders are not made eligible by attaching a repo ID afterward.
-- Known, clean cyclotron and app checkouts when the run was made.
-- Matching app protocol, valid benchmark, full unique cell set, no failures,
+- Known, clean cyclotron and harness checkouts when the run was made.
+- Matching harness protocol, valid benchmark, full unique cell set, no failures,
   no test/repeat/force overrides and no unmerged shard.
 - Published task IDs in the pinned dataset's `eval.yaml`, declaring
   `evaluation_framework: cyclotron`.
@@ -134,7 +135,7 @@ local-source upload hint does not determine cyclotron eligibility.
 
 Scores go to `.eval_results/<org>__<benchmark>.yaml` in each evaluated model
 repo. Existing entries for other datasets/tasks are kept. Dates are strings,
-and notes identify the cyclotron/app/policy commits and scoring context.
+and notes identify the cyclotron/harness/policy commits and scoring context.
 Nothing receives a verified badge or verification token automatically.
 
 Commits use the evaluated model SHA as `parent_commit`: if main has moved,
@@ -184,7 +185,7 @@ Before writing remotely, cyclotron:
 3. Checks protocol compatibility and a clean, public harness commit, and a
    clean cyclotron checkout. Bump `benchmark.yaml`'s version when scored content
    changes; versions cannot decrease.
-4. Records the app's commit in `harness.tested_commit`, builds `eval.yaml` with
+4. Records the harness's commit in `harness.tested_commit`, builds `eval.yaml` with
    `evaluation_framework: cyclotron` and each task's `harness`, preserves
    historical task IDs, and builds the dataset card while retaining README prose
    and unrelated metadata.
@@ -193,8 +194,8 @@ Before writing remotely, cyclotron:
 
 ### The harness in eval.yaml
 
-Cyclotron is the evaluation framework; the app that runs and scores a benchmark
-(HPV is the first) is its harness. The
+Cyclotron is the evaluation framework; the harness runs and scores a
+benchmark (HPV is the first). The
 [eval.yaml spec](https://huggingface.co/docs/hub/en/eval-results) fixes the
 top-level fields, and keeps framework-specific settings in each task, as with
 inspect-ai's `solvers` and `scorers`. So each task names its harness:
@@ -212,12 +213,12 @@ tasks:
     commit: a90090b716d2f121989803fe4afc7be8a45aa6c7
 ```
 
-`name` is the registered app, `protocol` the scoring protocol the results are
-comparable under, and `commit` the app commit the benchmark was checked with.
-Running a published benchmark selects that app, and `submit` refuses a result
-made with a different one. Tasks from earlier versions keep the block they were
-published with. The card is tagged `cyclotron` plus the benchmark's own `tags`,
-not the app's name.
+`name` is the registered harness, `protocol` the scoring protocol the results
+are comparable under, and `commit` the harness commit the benchmark was checked
+with. Running a published benchmark selects that harness, and `submit` refuses a
+result made with a different one. Tasks from earlier versions keep the block
+they were published with. The card is tagged `cyclotron` plus the benchmark's
+own `tags`, not the harness's name.
 
 Set `license:` in `benchmark.yaml` to a Hub license ID or a publishable license
 filename such as `LICENSE` or `LICENSE.txt`. The named file must be included in
@@ -255,7 +256,7 @@ Local editing/runs and metadata dry-runs work independently; the Hub may reject
 `eval.yaml` until registration is available. See the
 [Hub eval-results specification](https://huggingface.co/docs/hub/en/eval-results).
 
-## Storage and adding an app
+## Storage and adding a harness
 
 `CYCLOTRON_CACHE_DIR` overrides `~/.cache/cyclotron/` (which otherwise honors
 `XDG_CACHE_HOME`). Hub snapshots are separated by endpoint, repository type,
@@ -265,10 +266,11 @@ opening the same Hub reference preserves edits rather than overwriting them.
 Private repositories use `hf auth login` or `HF_TOKEN`; `HF_ENDPOINT` selects
 the Hub. Local run/view paths do not need Hub authentication.
 
-Adapters live in `source/cyclotron/cyclotron/evaluation/apps/`. Add a trusted
-adapter and explicit registry entry/legacy repository alias in `apps/base.py`.
-An adapter owns bootstrap, file selection, view/run commands, benchmark
-inspection/task descriptors, result interpretation and app-specific blockers.
-Cyclotron owns all Hub access and provenance. HPV's thin offline JS bridge is
-`scripts/apps/hpv-inspect.mjs`; it reuses HPV's format validation and hash
-functions without calling its HF workflows. A future app need not use Node.
+Adapters live in `source/cyclotron/cyclotron/evaluation/harnesses/`. Add a
+trusted adapter and explicit registry entry/legacy repository alias in
+`harnesses/base.py`. An adapter owns bootstrap, file selection, view/run
+commands, benchmark inspection/task descriptors, result interpretation and
+harness-specific blockers. Cyclotron owns all Hub access and provenance. HPV's
+thin offline JS bridge is `scripts/harnesses/hpv-inspect.mjs`; it reuses HPV's
+format validation and hash functions without calling its HF workflows. A future
+harness need not use Node.

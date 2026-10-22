@@ -56,7 +56,7 @@ Options after the argument:
 | `--port <n>` | Dev server port (default: 3000, or the next free one). |
 | `--no-open` | Do not open a browser window. Added automatically over SSH or without a display. |
 | `--benchmark <folder or datasets/org/name[@rev]>` | Open this benchmark in HPV's existing editor (default: cyclotron's `benchmarks/default`). A local folder is edited in place; a Hub dataset gets a separate writable copy. |
-| `--app <name>` | Select a registered app (currently `humanoid-policy-viewer`); also configurable through `CYCLOTRON_APP`. |
+| `--harness <name>` | Select a registered harness (currently `humanoid-policy-viewer`); also configurable through `CYCLOTRON_HARNESS`. |
 
 Private or gated Hub repos need `hf auth login` or `HF_TOKEN` set. Cyclotron's
 Python SDK handles authentication, not HPV. `HF_ENDPOINT` selects another Hub.

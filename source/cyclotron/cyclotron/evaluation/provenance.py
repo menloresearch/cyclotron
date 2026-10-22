@@ -74,7 +74,7 @@ def core_blockers(manifest, result_path):
         reasons.append("No complete, supported cyclotron provenance record")
     if manifest.get("result_sha256") != sha256(result_path):
         reasons.append("result.json changed after cyclotron finalized it")
-    for name in ("cyclotron", "app"):
+    for name in ("cyclotron", "harness"):
         state = manifest.get(name, {})
         if not state.get("commit") or state.get("dirty") is not False:
             reasons.append(f"The {name} checkout was dirty or its commit was unknown")

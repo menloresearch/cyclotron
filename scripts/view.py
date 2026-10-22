@@ -1,4 +1,4 @@
-"""Open a policy and benchmark folder in a cyclotron viewing app."""
+"""Open a policy and benchmark folder in a cyclotron harness."""
 
 import sys
 from pathlib import Path

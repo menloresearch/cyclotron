@@ -88,7 +88,7 @@ def test_metadata_preserves_prose_and_historical_tasks(tmp_path, inspection):
     assert "&" not in generated["eval.yaml"]
     front, body = publishing.split_card(generated["README.md"])
     assert front["custom"] == "preserved"
-    # The framework is cyclotron: the app's own tag is dropped, even from an earlier card.
+    # The framework is cyclotron: the harness's own tag is dropped, even from an earlier card.
     assert front["tags"] == ["cyclotron", "custom"]
     assert body == "Research notes.\n"
 
@@ -122,26 +122,26 @@ def publication(tmp_path, monkeypatch, inspection):
     (directory / "data/flat").mkdir(parents=True)
     (directory / "data/flat/test.jsonl").write_text("{}\n")
     state = {"commit": SHA, "dirty": False}
-    app = Mock()
-    app.state.return_value = state
-    app.inspect_benchmark.return_value = inspection
-    app.harness.return_value = HARNESS
-    monkeypatch.setattr(publishing, "select_app", lambda *a, **kw: app)
+    harness = Mock()
+    harness.state.return_value = state
+    harness.inspect_benchmark.return_value = inspection
+    harness.task_harness.return_value = HARNESS
+    monkeypatch.setattr(publishing, "select_harness", lambda *a, **kw: harness)
     monkeypatch.setattr(publishing, "git_state", lambda *a: state.copy())
     api = Mock(endpoint="https://huggingface.co")
     api.repo_info.side_effect = http_error(404, RepositoryNotFoundError)
-    return directory, app, api
+    return directory, harness, api
 
 
 def test_publish_dry_run_does_not_mutate_folder_or_hub(publication):
-    directory, app, api = publication
+    directory, harness, api = publication
     before = file_manifest(directory)
     result = publishing.publish(ROOT, directory, "org/suite", create=True, dry_run=True, api=api)
     assert not result["blockers"]
     spec = yaml.safe_load(result["files"]["eval.yaml"])
     assert spec["evaluation_framework"] == "cyclotron"
-    # The harness block records the app commit the benchmark was checked with.
-    assert app.harness.call_args.args[1] == SHA and spec["tasks"][0]["harness"] == HARNESS
+    # The harness block records the harness commit the benchmark was checked with.
+    assert harness.task_harness.call_args.args[1] == SHA and spec["tasks"][0]["harness"] == HARNESS
     assert file_manifest(directory) == before
     api.create_repo.assert_not_called()
     api.create_commit.assert_not_called()
@@ -150,8 +150,8 @@ def test_publish_dry_run_does_not_mutate_folder_or_hub(publication):
 
 @pytest.mark.parametrize("included", [False, True])
 def test_publish_requires_custom_license_in_upload(publication, included):
-    directory, app, api = publication
-    inspection = app.inspect_benchmark.return_value
+    directory, harness, api = publication
+    inspection = harness.inspect_benchmark.return_value
     inspection["raw"]["license"] = "LICENSE.txt"
     inspection["card"].update(license="other", license_link="LICENSE.txt")
     (directory / "LICENSE.txt").write_text("Custom license terms.\n")
@@ -168,19 +168,19 @@ def test_publish_requires_custom_license_in_upload(publication, included):
 
 
 def test_publish_refuses_concurrent_ui_edit(publication):
-    directory, app, api = publication
-    inspection = app.inspect_benchmark.return_value
+    directory, harness, api = publication
+    inspection = harness.inspect_benchmark.return_value
     def edit_during_inspection(*args):
         (directory / "data/flat/test.jsonl").write_text('{"changed":true}\n')
         return inspection
-    app.inspect_benchmark.side_effect = edit_during_inspection
+    harness.inspect_benchmark.side_effect = edit_during_inspection
     with pytest.raises(ValueError, match="changed during"):
         publishing.publish(ROOT, directory, "org/suite", create=True, dry_run=True, api=api)
     api.create_commit.assert_not_called()
 
 
 def test_publish_new_dataset_private_and_pr_not_tagged(publication):
-    directory, app, api = publication
+    directory, harness, api = publication
     api.repo_info.side_effect = [http_error(404, RepositoryNotFoundError), SimpleNamespace(sha=SHA)]
     api.create_commit.return_value = SimpleNamespace(pr_url="https://hub/pr/1", commit_url=None, oid="b" * 40)
     publishing.publish(ROOT, directory, "org/suite", create=True, pr=True, api=api)
@@ -191,7 +191,7 @@ def test_publish_new_dataset_private_and_pr_not_tagged(publication):
 
 
 def test_publish_partial_success_reports_tag_retry(publication):
-    directory, app, api = publication
+    directory, harness, api = publication
     api.repo_info.side_effect = [http_error(404, RepositoryNotFoundError), SimpleNamespace(sha=SHA)]
     api.create_commit.return_value = SimpleNamespace(pr_url=None, commit_url="https://hub/commit", oid="b" * 40)
     api.list_repo_refs.side_effect = RuntimeError("offline")
@@ -218,12 +218,12 @@ def test_failed_run_never_gets_completed_manifest(tmp_path, monkeypatch):
     model.mkdir()
     (dataset / "benchmark.yaml").write_text("name: test")
     (model / "policy.onnx").write_bytes(b"policy")
-    app = Mock()
-    app.inspect_benchmark.return_value = {"errors": [], "problems": []}
-    app.inspect_policy.return_value = {"path": str(model), "primary": "policy.onnx", "files": file_manifest(model)}
-    app.state.return_value = {"commit": SHA, "dirty": False}
-    app.run.side_effect = RuntimeError("interrupted")
-    monkeypatch.setattr(runner, "resolve_benchmark", lambda *a: (app, {"path": str(dataset), "files": file_manifest(dataset)}))
+    harness = Mock()
+    harness.inspect_benchmark.return_value = {"errors": [], "problems": []}
+    harness.inspect_policy.return_value = {"path": str(model), "primary": "policy.onnx", "files": file_manifest(model)}
+    harness.state.return_value = {"commit": SHA, "dirty": False}
+    harness.run.side_effect = RuntimeError("interrupted")
+    monkeypatch.setattr(runner, "resolve_benchmark", lambda *a: (harness, {"path": str(dataset), "files": file_manifest(dataset)}))
     monkeypatch.setattr(runner, "resolve_input", lambda *a: {})
     out = tmp_path / "result"
     with pytest.raises(RuntimeError, match="interrupted"):

@@ -1,18 +1,18 @@
-"""Thin script CLI: common flags translated, app words passed through."""
+"""Thin script CLI: common flags translated, harness words passed through."""
 
 import argparse
 import sys
 from pathlib import Path
 
 
-VALUE_OPTIONS = ("app", "revision", "benchmark", "policy", "out", "port", "tests", "repeats", "jobs", "robots", "shard")
+VALUE_OPTIONS = ("harness", "revision", "benchmark", "policy", "out", "port", "tests", "repeats", "jobs", "robots", "shard")
 FLAG_OPTIONS = ("no-open", "force", "watch", "verbose")
 
 
 def parse_run(argv, viewing=False):
     parser = argparse.ArgumentParser(
-        description="View/edit a benchmark in its app." if viewing else "Run a local or Hugging Face benchmark.",
-        epilog="Known --flags and HPV key=value words are accepted. Unknown app options pass through. "
+        description="View/edit a benchmark in its harness." if viewing else "Run a local or Hugging Face benchmark.",
+        epilog="Known --flags and HPV key=value words are accepted. Unknown harness options pass through. "
                "Benchmark actions: view, submit, publish, release. No uploads occur during a run.",
         allow_abbrev=False,
     )
@@ -93,22 +93,22 @@ def main(root, argv=None, viewing=False):
             parser.add_argument("dataset")
             parser.add_argument("--base")
             parser.add_argument("--create", action="store_true")
-            parser.add_argument("--app")
+            parser.add_argument("--harness")
         if action == "release":
             parser.add_argument("dataset")
             parser.add_argument("revision")
         args = parser.parse_args(argv)
         if action == "view":
-            from .apps.base import select_app
+            from .harnesses.base import select_harness
             from .provenance import read_json, result_dir
 
             directory = result_dir(args.result)
             native = read_json(directory / "result.json")
             sidecar = directory / "cyclotron.json"
-            app_name = read_json(sidecar)["app"]["name"] if sidecar.is_file() else None
-            app = select_app(root, app_name, native.get("benchmark", {}).get("raw"))
+            harness_name = read_json(sidecar)["harness"]["name"] if sidecar.is_file() else None
+            harness = select_harness(root, harness_name, native.get("benchmark", {}).get("raw"))
             options = ([f"port={args.port}"] if args.port else []) + (["no-open"] if args.no_open else [])
-            return app.view_result(directory, options)
+            return harness.view_result(directory, options)
         if action == "submit":
             from .eval_results import submit
 
@@ -116,14 +116,14 @@ def main(root, argv=None, viewing=False):
         from .publishing import publish, release
 
         if action == "publish":
-            return publish(root, args.directory, args.dataset, args.base, args.create, args.pr, args.dry_run, args.app)
+            return publish(root, args.directory, args.dataset, args.base, args.create, args.pr, args.dry_run, args.harness)
         return release(root, args.dataset, args.revision, args.dry_run)
     args, policies, benchmark, options = parse_run(argv, viewing)
     from .runner import run, view
 
     if viewing:
-        return view(root, policies[0], benchmark, args.app, args.revision, options)
-    return run(root, policies, benchmark, args.app, args.revision, args.out, options)
+        return view(root, policies[0], benchmark, args.harness, args.revision, options)
+    return run(root, policies, benchmark, args.harness, args.revision, args.out, options)
 
 
 def entry(root, viewing=False):
@@ -138,7 +138,7 @@ def entry(root, viewing=False):
     except KeyboardInterrupt:
         return 130
     except subprocess.CalledProcessError as error:
-        print(f"[ERROR] App command exited with status {error.returncode}", file=sys.stderr)
+        print(f"[ERROR] Harness command exited with status {error.returncode}", file=sys.stderr)
         return error.returncode if error.returncode > 0 else 128 - error.returncode
     except (ValueError, OSError) as error:
         print(f"[ERROR] {error}", file=sys.stderr)

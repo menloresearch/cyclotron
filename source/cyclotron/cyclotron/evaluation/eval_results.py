@@ -4,7 +4,7 @@ import math
 
 import yaml
 
-from .apps.base import select_app
+from .harnesses.base import select_harness
 from .hub import download, hub_api, read_repo_text, commit_files
 from .provenance import core_blockers, read_json, result_dir
 
@@ -57,7 +57,7 @@ def build_entries(run, manifest, key, policy):
         if task.get("ci95"):
             notes.append(f"95%CI={task['ci95']}")
         notes.extend((f"cyclotron@{manifest['cyclotron']['commit'][:12]}",
-                      f"{manifest['app']['name']}@{manifest['app']['commit'][:12]}",
+                      f"{manifest['harness']['name']}@{manifest['harness']['commit'][:12]}",
                       f"protocol={run['provenance']['hpv']['protocol']}",
                       f"policy@{policy['sha'][:12]}"))
         robot = run.get("provenance", {}).get("asimov1", {}).get("commit")
@@ -75,11 +75,11 @@ def submit(root, directory, pr=False, dry_run=False, api=None):
     if not (directory / "cyclotron.json").is_file():
         raise ValueError("This result has no cyclotron provenance; native/browser results are viewable but not submittable")
     manifest = read_json(directory / "cyclotron.json")
-    app = select_app(root, manifest.get("app", {}).get("name"))
-    run = app.normalize_result(read_json(directory / "result.json"))
+    harness = select_harness(root, manifest.get("harness", {}).get("name"))
+    run = harness.normalize_result(read_json(directory / "result.json"))
     reasons = core_blockers(manifest, directory / "result.json")
     if manifest.get("inspection") and manifest.get("policies"):
-        reasons.extend(app.submit_blockers(run, manifest))
+        reasons.extend(harness.submit_blockers(run, manifest))
     else:
         reasons.append("Missing recorded inspection or policies")
     if reasons:
@@ -89,7 +89,7 @@ def submit(root, directory, pr=False, dry_run=False, api=None):
         if item.get("endpoint") != api.endpoint.rstrip("/"):
             raise ValueError("The recorded Hub endpoint differs from the configured endpoint")
         checked = download({"id": item["id"], "repo_type": item["repo_type"], "revision": item["sha"]},
-                           app.dataset_files if item["repo_type"] == "dataset" else app.model_files, api=api)
+                           harness.dataset_files if item["repo_type"] == "dataset" else harness.model_files, api=api)
         if checked["sha"] != item["sha"] or checked["files"] != item["files"]:
             raise ValueError(f"Recorded input differs from pinned Hub bytes: {item['id']}")
     dataset = manifest["benchmark"]
@@ -110,8 +110,8 @@ def submit(root, directory, pr=False, dry_run=False, api=None):
             if task is None:
                 raise ValueError("Result task IDs are not declared in the pinned dataset's eval.yaml")
             declared = (task.get("harness") or {}).get("name")
-            if declared not in (None, app.name):
-                raise ValueError(f"eval.yaml says {task['id']} is scored by {declared}, but this run used {app.name}")
+            if declared not in (None, harness.name):
+                raise ValueError(f"eval.yaml says {task['id']} is scored by {declared}, but this run used {harness.name}")
         path = eval_path(dataset["id"])
         old = read_repo_text(api, policy["id"], path, policy["sha"])
         content = merge_results(old, entries)

@@ -4,8 +4,8 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { resolve, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-const [app, command, directory, commit] = process.argv.slice(2);
-const load = (path) => import(pathToFileURL(resolve(app, path)).href);
+const [hpv, command, directory, commit] = process.argv.slice(2);
+const load = (path) => import(pathToFileURL(resolve(hpv, path)).href);
 try {
   if (command === 'policy') {
     const { findLocalPolicy } = await load('scripts/localPolicy.mjs');
@@ -34,12 +34,12 @@ try {
       return entry.isDirectory() && !entry.name.startsWith('.') ? walk(join(dir, entry.name), `${name}/`)
         : entry.isFile() && BENCHMARK_FILES.some((re) => re.test(name)) ? [name] : [];
     });
-    const provenance = collectProvenance(app);
+    const provenance = collectProvenance(hpv);
     console.log(JSON.stringify({
       schema: 'cyclotron-hpv-inspection/1', raw: rawBenchmark, rows, tasks,
       errors: checks.errors, warnings: checks.warnings, problems,
       cells: plan.cells, tests: plan.tests, scored_hash: scoredContentHash(rawBenchmark, rows),
-      files: walk(directory), provenance, public: onPublicRepo(app, provenance.hpv.commit),
+      files: walk(directory), provenance, public: onPublicRepo(hpv, provenance.hpv.commit),
       card: cardFrontMatter(rows, {
         license: licenseFields(directory, rawBenchmark.license, benchmark.name),
         tags: rawBenchmark.tags, prettyName: name,

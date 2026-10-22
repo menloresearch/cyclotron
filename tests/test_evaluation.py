@@ -13,8 +13,8 @@ import pytest
 import yaml
 
 from cyclotron.evaluation import hub, provenance, runner
-from cyclotron.evaluation.apps.base import select_app
-from cyclotron.evaluation.apps.hpv import HPV
+from cyclotron.evaluation.harnesses.base import select_harness
+from cyclotron.evaluation.harnesses.hpv import HPV
 from cyclotron.evaluation.cli import parse_run
 from cyclotron.evaluation.eval_results import build_entries, merge_results, submit
 
@@ -51,9 +51,9 @@ def test_cli_translation_and_input_aliases(tmp_path):
     (tmp_path / "benchmark.yaml").write_text("name: test")
     args, policies, benchmark, words = parse_run([
         "org/first", "--jobs", "2", f"benchmark={tmp_path}", "policy=org/second",
-        "--no-open", "--", "robots=3", "future=one",
+        "--no-open", "--harness", HPV.name, "--", "robots=3", "future=one",
     ])
-    assert policies == ["org/first", "org/second"]
+    assert policies == ["org/first", "org/second"] and args.harness == HPV.name
     assert benchmark == str(tmp_path)
     assert words == ["jobs=2", "robots=3", "no-open", "future=one"]
     assert args.out is None
@@ -73,29 +73,29 @@ def test_view_known_options():
 
 
 def test_adapter_registry(monkeypatch):
-    monkeypatch.delenv("CYCLOTRON_APP", raising=False)
-    assert select_app(ROOT, benchmark={"harness": {"repo": HPV.repo}}).name == HPV.name
+    monkeypatch.delenv("CYCLOTRON_HARNESS", raising=False)
+    assert select_harness(ROOT, benchmark={"harness": {"repo": HPV.repo}}).name == HPV.name
     for raw in ({"harness": {"repo": "https://evil.example/code"}},
-                {"harness": {"repo": HPV.repo, "app": "other"}}):
+                {"harness": {"repo": HPV.repo, "name": "other"}}):
         with pytest.raises(ValueError):
-            select_app(ROOT, benchmark=raw)
+            select_harness(ROOT, benchmark=raw)
     with pytest.raises(ValueError, match="available"):
-        select_app(ROOT, "other")
+        select_harness(ROOT, "other")
 
 
-def test_published_harness_selects_the_app(monkeypatch):
-    monkeypatch.delenv("CYCLOTRON_APP", raising=False)
+def test_published_harness_is_selected(monkeypatch):
+    monkeypatch.delenv("CYCLOTRON_HARNESS", raising=False)
     def spec(*names):
         return {"tasks": [{"id": f"t{i}", **({"harness": {"name": n}} if n else {})} for i, n in enumerate(names)]}
     legacy = {"harness": {"repo": HPV.repo}}
-    assert select_app(ROOT, spec=spec(HPV.name)).name == HPV.name
-    assert select_app(ROOT, benchmark=legacy, spec=spec(None)).name == HPV.name
+    assert select_harness(ROOT, spec=spec(HPV.name)).name == HPV.name
+    assert select_harness(ROOT, benchmark=legacy, spec=spec(None)).name == HPV.name
     for raw, published in ((legacy, spec("other")), ({}, spec(HPV.name, "other")), ({}, spec("other"))):
         with pytest.raises(ValueError):
-            select_app(ROOT, benchmark=raw, spec=published)
+            select_harness(ROOT, benchmark=raw, spec=published)
     with pytest.raises(ValueError, match="conflicts"):
-        select_app(ROOT, "other", spec=spec(HPV.name))
-    block = HPV(ROOT).harness({"raw": {"harness": {"protocol": 1}}}, SHA)
+        select_harness(ROOT, "other", spec=spec(HPV.name))
+    block = HPV(ROOT).task_harness({"raw": {"harness": {"protocol": 1}}}, SHA)
     assert block == {"name": HPV.name, "repo": HPV.repo, "protocol": 1, "commit": SHA}
 
 
@@ -186,7 +186,7 @@ def recorded_result(tmp_path):
               "primary": "policy.onnx", "hpv_hashes": {"onnx": "hash", "envYaml": "env"}}
     manifest = {"schema": provenance.SCHEMA, "status": "complete", "options": [],
                 "cyclotron": {"commit": SHA, "dirty": False},
-                "app": {"name": HPV.name, "commit": SHA, "dirty": False},
+                "harness": {"name": HPV.name, "commit": SHA, "dirty": False},
                 "policies": [policy], "benchmark": {**policy, "id": "org/suite", "repo_type": "dataset"},
                 "inspection": {"raw": raw, "errors": [], "problems": [], "cells": [cell],
                                "tests": [{"id": "stand"}], "tasks": [{"id": "score_v1"}]}}
@@ -201,8 +201,8 @@ def recorded_result(tmp_path):
 
 def test_full_suite_blockers(recorded_result):
     run, manifest = recorded_result
-    app = HPV(ROOT)
-    assert not app.submit_blockers(run, manifest)
+    harness = HPV(ROOT)
+    assert not harness.submit_blockers(run, manifest)
     for mutation in (lambda r: r["cells"].append(copy.deepcopy(r["cells"][0])),
                      lambda r: r["cells"][0].update(seed=9),
                      lambda r: r["cells"][0].update(error="failed"),
@@ -214,9 +214,9 @@ def test_full_suite_blockers(recorded_result):
                      lambda r: r.update(shard={"index": 1, "count": 2})):
         changed = copy.deepcopy(run)
         mutation(changed)
-        assert app.submit_blockers(changed, manifest)
+        assert harness.submit_blockers(changed, manifest)
     manifest["options"] = ["force"]
-    assert app.submit_blockers(run, manifest)
+    assert harness.submit_blockers(run, manifest)
 
 
 def test_result_binding(recorded_result, tmp_path):
@@ -253,7 +253,7 @@ def test_eval_yaml_merge_and_quoted_date(recorded_result):
         build_entries(run, manifest, "m0", manifest["policies"][0])
 
 
-@pytest.mark.parametrize("harness", ["", "\n  harness: {name: humanoid-policy-viewer}", "\n  harness: {name: other-app}"])
+@pytest.mark.parametrize("harness", ["", "\n  harness: {name: humanoid-policy-viewer}", "\n  harness: {name: other-harness}"])
 def test_submit_dry_run_pinned_inputs_and_no_writes(recorded_result, tmp_path, monkeypatch, harness):
     from cyclotron.evaluation import eval_results
 
@@ -267,9 +267,9 @@ def test_submit_dry_run_pinned_inputs_and_no_writes(recorded_result, tmp_path, m
     commit = Mock()
     monkeypatch.setattr(eval_results, "commit_files", commit)
     api = Mock(endpoint="https://huggingface.co")
-    if "other-app" in harness:
+    if "other-harness" in harness:
         # A task's results only count from the harness its eval.yaml names.
-        with pytest.raises(ValueError, match="scored by other-app"):
+        with pytest.raises(ValueError, match="scored by other-harness"):
             submit(ROOT, tmp_path, dry_run=True, api=api)
     else:
         assert len(submit(ROOT, tmp_path, dry_run=True, api=api)) == 1
@@ -290,24 +290,24 @@ def test_cli_help_imports_no_training():
 
 
 def test_child_args_are_local_and_headless(monkeypatch, tmp_path):
-    app = HPV(ROOT)
+    harness = HPV(ROOT)
     execute = Mock()
-    monkeypatch.setattr(app, "execute", execute)
+    monkeypatch.setattr(harness, "execute", execute)
     monkeypatch.setenv("SSH_CONNECTION", "test")
-    app.view(str(tmp_path / "policy"), str(tmp_path / "suite"), [])
+    harness.view(str(tmp_path / "policy"), str(tmp_path / "suite"), [])
     assert execute.call_args.args[0] == ["scripts/hf.mjs", str(tmp_path / "policy"), f"benchmark={tmp_path / 'suite'}", "no-open"]
-    app.run([str(tmp_path / "policy")], str(tmp_path / "suite"), tmp_path / "out", ["jobs=2"])
+    harness.run([str(tmp_path / "policy")], str(tmp_path / "suite"), tmp_path / "out", ["jobs=2"])
     assert f"out={tmp_path / 'out'}" in execute.call_args.args[0]
-    env = app.env()
+    env = harness.env()
     assert env["HPV_BENCHMARKS_DIR"].startswith(str(ROOT / "logs"))
     assert "HF_TOKEN" not in env
 
 
 def test_default_benchmark_is_cyclotrons_own_and_opens_in_place(monkeypatch, tmp_path):
     monkeypatch.setattr(HPV, "prepare", lambda self: None)
-    app, item = runner.resolve_benchmark(ROOT, None)
+    harness, item = runner.resolve_benchmark(ROOT, None)
     assert Path(item["path"]) == ROOT / "benchmarks/default"
-    assert app.name == HPV.name and {"benchmark.yaml", "data/locomotion/test.jsonl"} <= set(item["files"])
+    assert harness.name == HPV.name and {"benchmark.yaml", "data/locomotion/test.jsonl"} <= set(item["files"])
     monkeypatch.setattr(runner, "resolve_input", lambda *a: {"path": str(tmp_path / "policy")})
     monkeypatch.setattr(runner, "working_copy", Mock(side_effect=AssertionError("the default was copied")))
     opened = Mock()
@@ -318,31 +318,31 @@ def test_default_benchmark_is_cyclotrons_own_and_opens_in_place(monkeypatch, tmp
 
 @pytest.mark.skipif(not __import__("shutil").which("node")
                     or not (ROOT / "third_party/humanoid-policy-viewer/node_modules/yaml").is_dir(),
-                    reason="needs node and the app's npm dependencies")
+                    reason="needs node and the harness's npm dependencies")
 def test_default_benchmark_is_valid_for_the_pinned_app(monkeypatch, tmp_path):
-    # After an app upgrade, this is what says cyclotron's own copy needs updating.
+    # After a harness upgrade, this is what says cyclotron's own copy needs updating.
     monkeypatch.setenv("CYCLOTRON_CACHE_DIR", str(tmp_path))
-    app = HPV(ROOT)
-    monkeypatch.setattr(app, "prepare", lambda: None)
-    inspection = app.inspect_benchmark(ROOT / "benchmarks/default")
+    harness = HPV(ROOT)
+    monkeypatch.setattr(harness, "prepare", lambda: None)
+    inspection = harness.inspect_benchmark(ROOT / "benchmarks/default")
     assert not inspection["errors"] and not inspection["problems"]
     assert [task["id"] for task in inspection["tasks"]] == ["survival_rate_v2", "survival_time_v2"]
 
 
 @pytest.mark.skipif(not __import__("shutil").which("node"), reason="needs node")
 @pytest.mark.parametrize("sig,forwarded", [("SIGTERM", True), ("SIGINT", False)])
-def test_stopping_the_app_is_quiet_and_signals_it_once(monkeypatch, tmp_path, capfd, sig, forwarded):
+def test_stopping_the_harness_is_quiet_and_signals_it_once(monkeypatch, tmp_path, capfd, sig, forwarded):
     import os
     import signal
     import threading
 
     monkeypatch.setenv("CYCLOTRON_CACHE_DIR", str(tmp_path))
-    app = HPV(ROOT)
-    monkeypatch.setattr(app, "prepare", lambda: None)
-    # Ctrl+C reaches the app through the terminal itself; only the wrapper is signalled here.
+    harness = HPV(ROOT)
+    monkeypatch.setattr(harness, "prepare", lambda: None)
+    # Ctrl+C reaches the harness through the terminal itself; only the wrapper is signalled here.
     child = ("for (const s of ['SIGINT', 'SIGTERM']) process.on(s, () => { console.log('got ' + s); process.exit(130); });"
              "setTimeout(() => process.exit(0), 1500);")
     threading.Timer(0.5, os.kill, (os.getpid(), getattr(signal, sig))).start()
     with pytest.raises(KeyboardInterrupt):
-        app.execute(["-e", child])
+        harness.execute(["-e", child])
     assert ("got " + sig in capfd.readouterr().out) is forwarded

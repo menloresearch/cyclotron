@@ -76,13 +76,13 @@ class HPV:
 
     def env(self):
         env = os.environ.copy()
-        owned = cache_root() / "apps" / self.name
+        owned = cache_root() / "harnesses" / self.name
         temporary = owned / "tmp"
         temporary.mkdir(parents=True, exist_ok=True)
         env.update(HPV_CACHE_DIR=str(owned), HPV_POLICY_LIBRARY_DIR=str(owned / "policies"),
                    HPV_POLICY_ROOTS="policies", HPV_BENCHMARK_RESULTS_DIR=str(self.results),
                    HPV_BENCHMARKS_DIR=str(self.workspaces), TMPDIR=str(temporary))
-        # No app operation should ever need Hub credentials.
+        # No harness operation should ever need Hub credentials.
         env.pop("HF_TOKEN", None)
         env.pop("HUGGING_FACE_HUB_TOKEN", None)
         return env
@@ -95,14 +95,14 @@ class HPV:
             if completed.returncode:
                 raise ValueError(completed.stderr.strip() or completed.stdout.strip())
             return json.loads(completed.stdout)
-        # Piped or logged output is block-buffered; print what we said before the app does.
+        # Piped or logged output is block-buffered; print what we said before the harness does.
         sys.stdout.flush()
         sys.stderr.flush()
         process = subprocess.Popen(command, cwd=self.path, env=self.env())
         previous, received = {}, []
         def forward(signum, frame):
             received.append(signum)
-            # Ctrl+C already reaches the app through the terminal's process group, and a
+            # Ctrl+C already reaches the harness through the terminal's process group, and a
             # second SIGINT would cut its graceful shutdown short; forward only SIGTERM.
             if signum != signal.SIGINT and process.poll() is None:
                 process.send_signal(signum)
@@ -114,7 +114,7 @@ class HPV:
             for sig, handler in previous.items():
                 signal.signal(sig, handler)
         if received:
-            # A deliberate stop, not an app failure: exit quietly with 130.
+            # A deliberate stop, not a harness failure: exit quietly with 130.
             raise KeyboardInterrupt
         if status:
             raise subprocess.CalledProcessError(status, command)
@@ -137,7 +137,7 @@ class HPV:
         self.execute(["scripts/benchmark.mjs", "view", directory, *self.headless_options(options)])
 
     def inspect_benchmark(self, directory, commit=None):
-        args = [self.root / "scripts/apps/hpv-inspect.mjs", self.path, "inspect", directory]
+        args = [self.root / "scripts/harnesses/hpv-inspect.mjs", self.path, "inspect", directory]
         if commit:
             args.append(commit)
         result = self.execute(args, capture=True)
@@ -148,13 +148,13 @@ class HPV:
     def task_specs(self, inspection):
         return inspection["tasks"]
 
-    def harness(self, inspection, commit):
-        # Each eval.yaml task names the app that runs and scores it, under the benchmark's protocol.
+    def task_harness(self, inspection, commit):
+        # Each eval.yaml task names the harness that runs and scores it, under the benchmark's protocol.
         protocol = (inspection["raw"].get("harness") or {}).get("protocol")
         return {"name": self.name, "repo": self.repo, "protocol": protocol, "commit": commit}
 
     def inspect_policy(self, item):
-        info = self.execute([self.root / "scripts/apps/hpv-inspect.mjs", self.path, "policy", item["path"]], capture=True)
+        info = self.execute([self.root / "scripts/harnesses/hpv-inspect.mjs", self.path, "policy", item["path"]], capture=True)
         directory = Path(info["policyDir"])
         return {**item, "path": str(directory), "primary": info["primary"], "hpv_hashes": info["hashes"],
                 "files": file_manifest(directory)}
@@ -175,9 +175,9 @@ class HPV:
                 reasons.append(f"Policy m{index} does not match the recorded ONNX/config hashes")
         if run.get("benchmark", {}).get("raw") != inspection["raw"]:
             reasons.append("Result benchmark settings do not match the resolved input")
-        native_app = run.get("provenance", {}).get("hpv", {})
-        if native_app.get("commit") != manifest["app"]["commit"]:
-            reasons.append("Result app commit differs from the recorded checkout")
+        native_harness = run.get("provenance", {}).get("hpv", {})
+        if native_harness.get("commit") != manifest["harness"]["commit"]:
+            reasons.append("Result harness commit differs from the recorded checkout")
         return reasons
 
     def submit_blockers(self, run, manifest):

@@ -114,7 +114,7 @@ def download(reference, select_files, api=None):
         raise ValueError(f"No supported input files in {reference['id']}")
     endpoint = api.endpoint.rstrip("/")
     endpoint_key = hashlib.sha256(endpoint.encode()).hexdigest()[:16]
-    # Apps label a policy by its real folder name, so the leaf names the repo, not the commit.
+    # Harnesses label a policy by its real folder name, so the leaf names the repo, not the commit.
     destination = (cache_root() / "hub" / endpoint_key / reference["repo_type"] / reference["id"] / sha
                    / reference["id"].replace("/", "__"))
     destination.parent.mkdir(parents=True, exist_ok=True)

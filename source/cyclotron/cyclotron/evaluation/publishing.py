@@ -1,4 +1,4 @@
-"""Publish benchmark folders authored in an app; no benchmark editor here."""
+"""Publish benchmark folders authored in a harness; no benchmark editor here."""
 
 import shutil
 import tempfile
@@ -6,7 +6,7 @@ from pathlib import Path
 
 import yaml
 
-from .apps.base import select_app
+from .harnesses.base import select_harness
 from .hub import cache_root, commit_files, download, hub_api, parse_reference
 from .provenance import file_manifest, git_state
 
@@ -48,7 +48,7 @@ def hub_files(inspection, directory, previous=None, *, harness):
         for key in ("license", "license_name", "license_link"):
             card.pop(key, None)
         card.update({key: value for key, value in inspection["card"].items() if key.startswith("license")})
-    # The app tags the card with its own name; the framework is cyclotron, so only the author's tags join it.
+    # The harness tags the card with its own name; the framework is cyclotron, so only the author's tags join it.
     own = list(raw.get("tags") or [])
     inherited = [tag for tag in front.get("tags", []) if tag != harness["name"] or tag in own]
     card["tags"] = list(dict.fromkeys(["cyclotron", *inherited, *own]))
@@ -83,15 +83,15 @@ def ensure_tag(api, repo_id, sha, version):
     print(f"Released {repo_id}@{name} ({sha})")
 
 
-def publish(root, directory, repo_id, base=None, create=False, pr=False, dry_run=False, app_name=None, api=None):
+def publish(root, directory, repo_id, base=None, create=False, pr=False, dry_run=False, harness_name=None, api=None):
     from huggingface_hub.errors import RepositoryNotFoundError
 
     directory = Path(directory).expanduser().resolve()
     raw = yaml.safe_load((directory / "benchmark.yaml").read_text())
     if not isinstance(raw, dict):
         raise ValueError("benchmark.yaml must contain a mapping")
-    app = select_app(root, app_name, raw)
-    app.prepare()
+    harness = select_harness(root, harness_name, raw)
+    harness.prepare()
     api = api or hub_api()
     target = parse_reference(repo_id, "dataset")
     if target["revision"] != "main":
@@ -110,7 +110,7 @@ def publish(root, directory, repo_id, base=None, create=False, pr=False, dry_run
         if info is None or api.repo_info(repo_id, repo_type="dataset", revision=base).sha != info.sha:
             raise ValueError("--base must still identify the dataset's current main commit")
     if info:
-        previous = Path(download({"id": repo_id, "repo_type": "dataset", "revision": info.sha}, app.dataset_files, api)["path"])
+        previous = Path(download({"id": repo_id, "repo_type": "dataset", "revision": info.sha}, harness.dataset_files, api)["path"])
     before = file_manifest(directory)
     temporary_root = cache_root() / "staging"
     temporary_root.mkdir(parents=True, exist_ok=True)
@@ -119,8 +119,8 @@ def publish(root, directory, repo_id, base=None, create=False, pr=False, dry_run
         shutil.copytree(directory, staged, ignore=shutil.ignore_patterns(".*", "node_modules"))
         if file_manifest(staged) != before or file_manifest(directory) != before:
             raise ValueError("Benchmark folder changed while staging; save edits and retry")
-        state = app.state()
-        inspection = app.inspect_benchmark(staged, state["commit"])
+        state = harness.state()
+        inspection = harness.inspect_benchmark(staged, state["commit"])
         blockers = [*inspection["errors"], *inspection["problems"]]
         if state["dirty"] is not False or not state["commit"]:
             blockers.append("The harness checkout must have a known, clean commit")
@@ -129,9 +129,9 @@ def publish(root, directory, repo_id, base=None, create=False, pr=False, dry_run
         cyclotron_state = git_state(root)
         if cyclotron_state["dirty"] is not False or not cyclotron_state["commit"]:
             blockers.append("The cyclotron checkout must have a known, clean commit for publication")
-        old_inspection = app.inspect_benchmark(previous) if previous else None
+        old_inspection = harness.inspect_benchmark(previous) if previous else None
         version_check(inspection, old_inspection)
-        generated = hub_files(inspection, staged, previous, harness=app.harness(inspection, state["commit"]))
+        generated = hub_files(inspection, staged, previous, harness=harness.task_harness(inspection, state["commit"]))
         files = {name: (staged / name).read_bytes() for name in inspection["files"] if name != "README.md"}
         files.update(generated)
         license_link = inspection["card"].get("license_link")
@@ -141,8 +141,8 @@ def publish(root, directory, repo_id, base=None, create=False, pr=False, dry_run
             files["benchmark.yaml"] = inspection["benchmark_yaml"]
         deletions = []
         if previous:
-            deletions = sorted(set(app.dataset_files(list(file_manifest(previous)))) - set(files))
-        if file_manifest(directory) != before or app.state() != state or git_state(root) != cyclotron_state:
+            deletions = sorted(set(harness.dataset_files(list(file_manifest(previous)))) - set(files))
+        if file_manifest(directory) != before or harness.state() != state or git_state(root) != cyclotron_state:
             raise ValueError("Benchmark folder or code checkout changed during publication preparation")
         print(f"Publish {directory} -> datasets/{repo_id}")
         print(f"Parent: {info.sha if info else '(new private repo)'}; version: {inspection['raw']['version']}")
@@ -185,11 +185,11 @@ def release(root, repo_id, revision, dry_run=False, api=None):
     info = api.repo_info(repo_id, repo_type="dataset", revision=revision)
     if info.sha not in {commit.commit_id for commit in api.list_repo_commits(repo_id, repo_type="dataset", revision="main")}:
         raise ValueError("Release revision is not in the dataset's main history")
-    app = select_app(root)
-    item = download({"id": repo_id, "repo_type": "dataset", "revision": info.sha}, app.dataset_files, api)
+    harness = select_harness(root)
+    item = download({"id": repo_id, "repo_type": "dataset", "revision": info.sha}, harness.dataset_files, api)
     raw = yaml.safe_load((Path(item["path"]) / "benchmark.yaml").read_text())
     spec = yaml.safe_load((Path(item["path"]) / "eval.yaml").read_text())
-    select_app(root, benchmark=raw, spec=spec)
+    select_harness(root, benchmark=raw, spec=spec)
     if spec.get("evaluation_framework") != "cyclotron" or not raw.get("harness", {}).get("tested_commit"):
         raise ValueError("Revision is not a cyclotron-published benchmark with a tested harness commit")
     if not isinstance(raw.get("version"), int) or isinstance(raw["version"], bool) or raw["version"] < 1:
