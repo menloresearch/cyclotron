@@ -4,9 +4,11 @@ Writes ``policy.onnx``, a TorchScript ``policy.pt`` and copies of the run's ``en
 ``code_state.yaml``, so the folder holds the same files as a policy shared on the Hugging Face Hub. Runs Isaac Sim
 headless with one environment to build the policy, like a restart of the run: the policy settings are set back to
 the ones the run saved in its ``env.yaml`` and ``agent.yaml``, which are their only source (no overrides), and are
-checked against those files once the environment is built. Stops if the joints and gains the policy's inputs and
-outputs resolve to (from the robot model) differ from the ones training recorded in ``code_state.yaml``, and warns if
-the robot model or the code of the policy's network (its rsl_rl models and modules) changed since the run was trained.
+checked against those files once the environment is built. The robot is the robot model the run was trained with,
+fetched at the commit ``code_state.yaml`` recorded when the current one differs. Stops if the joints and gains the
+policy's inputs and outputs resolve to (from the robot model) differ from the ones training recorded in
+``code_state.yaml``, and warns if the robot model or the code of the policy's network (its rsl_rl models and modules)
+changed since the run was trained.
 Then it loads only the policy from the checkpoint, and checks that policy.onnx and policy.pt give the same actions as
 the PyTorch policy. A run without ``env.yaml`` or ``agent.yaml`` can have them written from the current code, if you agree.
 """
@@ -139,6 +141,7 @@ from cyclotron.onnx_export import (
 )
 from cyclotron.policy_io import policy_io_differences, resolve_policy_io
 from cyclotron.policy_loading import load_policy
+from cyclotron.robot_model import load_training_robot_model
 from cyclotron.run_config import (
     RUN_CONFIGS,
     generated_run_configs,
@@ -191,11 +194,12 @@ def generated_config(cfg) -> str:
             return f.read()
 
 
-def check_policy_io(env, run_dir: str, env_cfg: dict, agent: dict, log) -> tuple[dict, str]:
+def check_policy_io(env, run_dir: str, env_cfg: dict, agent: dict, log, robot_note: str | None) -> tuple[dict, str]:
     """Compare the joints and gains the policy's inputs and outputs resolve to, and the robot model, with the run's.
 
-    Stops (closing ``env``) when the joints or gains changed, and on a changed robot model with --strict. Returns the
-    resolved inputs and outputs (``resolve_policy_io``) and the robot model's status (``robot_model_check``).
+    Stops (closing ``env``) when the joints or gains changed, and on a changed robot model with --strict. ``robot_note``
+    says why the run's own robot model wasn't loaded (``load_training_robot_model``). Returns the resolved inputs and
+    outputs (``resolve_policy_io``) and the robot model's status (``robot_model_check``).
     """
     # The settings name joints by pattern; the robot model decides which joints they match, in which order, and with
     # which gains. The check of policy.onnx against the checkpoint can't see a change here: both run in this
@@ -210,6 +214,8 @@ def check_policy_io(env, run_dir: str, env_cfg: dict, agent: dict, log) -> tuple
             log(f"    {line}")
         if robot_change:
             log(f"  The robot model changed: {robot_change}")
+            if robot_note:
+                log(f"  {robot_note}")
         log("  The policy settings match the run's, so the robot model the current code loads resolves them")
         log("  differently: the exported policy would drive the wrong joints or gains. Never exported, also without")
         log(f"  --strict. Load the robot model the run was trained with. {check_out_hint(run_dir)}")
@@ -219,6 +225,8 @@ def check_policy_io(env, run_dir: str, env_cfg: dict, agent: dict, log) -> tuple
         log("[INFO] Checked the joints and gains the policy resolves to against the run's: they match.")
     if robot_model == ROBOT_MODEL_CHANGED:
         log(f"[WARNING] The robot model changed since training: {robot_change}")
+        if robot_note:
+            log(f"  {robot_note}")
         if recorded_io:
             log("  The joints and gains the policy uses still match the run's, but the simulated robot doesn't.")
         else:
@@ -325,6 +333,9 @@ def main():
         log(f"[INFO] Set the policy settings back to the ones in the run's {' and '.join(saved)}.")
     # After the restore, which can bring back a network config of another kind (e.g. an LSTM actor).
     agent_cfg = handle_deprecated_rsl_rl_cfg(agent_cfg, installed_version)
+    robot_loaded, robot_note = load_training_robot_model(env_cfg, run_dir)
+    if robot_loaded:
+        log(f"[INFO] {robot_loaded}")
 
     env = gym.make(args_cli.task, cfg=env_cfg)
     # Written and compared where train.py saves params/: after the environment is created, which resolves parts of
@@ -348,7 +359,7 @@ def main():
         env.close()
         sys.exit(1)
     log("[INFO] Checked the rebuilt policy settings against the run's env.yaml and agent.yaml: they match.")
-    io, robot_model = check_policy_io(env, run_dir, env_dict, agent_dict, log)
+    io, robot_model = check_policy_io(env, run_dir, env_dict, agent_dict, log, robot_note)
     if new:
         log("[WARNING] The current code has policy settings the run didn't save; they keep the current code's value:")
         for line in new:

@@ -191,6 +191,32 @@ def test_robot_model_check_compares_the_urdf_the_current_config_loads(tmp_path):
     assert robot_model_check(run, env) == ("changed", line)
 
 
+def test_describe_changes_says_why_the_run_s_robot_model_wasnt_loaded(tmp_path):
+    params = tmp_path / "params"
+    params.mkdir()
+    (params / "env.yaml").write_text(dump(make_env()))
+    (params / "agent.yaml").write_text(dump(make_agent()))
+    urdf = tmp_path / "asimov_1.urdf"
+    urdf.write_text('<robot name="asimov_1"/>')
+    trained = {"urdf_filepath": "sim-model/urdf/asimov_1.urdf", "sha256": "bcd9a911c193de", "commit": "732cc60dcb8f"}
+    write_code_state(str(params), {"robot_model": {**trained, "dirty": False}})
+    now = hashlib.sha256(urdf.read_bytes()).hexdigest()[:12]
+    message, level = describe_changes(
+        str(tmp_path), with_robot(make_env(), urdf), make_agent(), "Behaviour may differ.", None, "Fetching failed."
+    )
+    assert level == "warning" and message.splitlines()[1:4] == [
+        "  Robot model:",
+        f"    sim-model/urdf/asimov_1.urdf @ 732cc60 (sha256 bcd9a911c193) -> asimov_1.urdf @ unknown (sha256 {now})",
+        "    Fetching failed.",
+    ]
+    # Only under a changed robot model.
+    write_code_state(str(params), {"robot_model": record_code_state(with_robot(make_env(), urdf))["robot_model"]})
+    message, _ = describe_changes(
+        str(tmp_path), with_robot(make_env(), urdf), make_agent(), "Behaviour may differ.", None, "Fetching failed."
+    )
+    assert "Fetching failed." not in message
+
+
 def test_a_robot_model_edited_at_the_same_commit_names_the_uncommitted_changes():
     record = {"urdf_filepath": "urdf/asimov_1.urdf", "commit": "732cc60dcb8f", "sha256": "bcd9a911c193de"}
     assert _model_where({**record, "dirty": False}) == "urdf/asimov_1.urdf @ 732cc60 (sha256 bcd9a911c193)"

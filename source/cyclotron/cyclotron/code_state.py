@@ -383,7 +383,12 @@ def _model_where(record: dict) -> str:
 
 
 def describe_changes(
-    run_dir: str, env_cfg: dict, agent_cfg: dict, consequence: str, policy_io: dict | None = None
+    run_dir: str,
+    env_cfg: dict,
+    agent_cfg: dict,
+    consequence: str,
+    policy_io: dict | None = None,
+    robot_model_note: str | None = None,
 ) -> tuple[str, str]:
     """Compare a run with the current code. Returns the message to print and its level: ``"ok"``, ``"warning"``,
     or ``"error"`` when the policy's network changed in a way its weights can't show.
@@ -391,6 +396,7 @@ def describe_changes(
     ``env_cfg`` and ``agent_cfg`` are the current configs as plain dicts (Isaac Lab's ``class_to_dict``), taken where
     training saves them: after the environment is created. ``policy_io`` is what the live environment resolves the
     policy's inputs and outputs to (``policy_io.resolve_policy_io``), compared with what training recorded.
+    ``robot_model_note`` follows a changed robot model: why the run's own wasn't loaded (``load_training_robot_model``).
     """
     params = os.path.join(run_dir, "params")
     if not all(os.path.isfile(os.path.join(params, name)) for name in RUN_CONFIGS):
@@ -415,7 +421,7 @@ def describe_changes(
     sections = [
         ("Policy settings (what the policy sees and does)", settings),
         ("Joints and gains the policy's inputs and outputs resolve to", resolved),
-        ("Robot model", [robot] if robot else []),
+        ("Robot model", [robot, *([robot_model_note] if robot_model_note else [])] if robot else []),
         ("Code of the policy's network", network),
     ]
     for title, changes in sections:

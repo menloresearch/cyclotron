@@ -37,6 +37,11 @@ parser.add_argument(
 parser.add_argument(
     "--strict", action="store_true", help="Stop, instead of warning, if the code changed since the run was trained."
 )
+parser.add_argument(
+    "--current_robot_model",
+    action="store_true",
+    help="Simulate the robot model the current code loads, instead of the one the run was trained with.",
+)
 cli_args.add_rsl_rl_args(parser)
 AppLauncher.add_app_launcher_args(parser)
 args_cli, hydra_args = parser.parse_known_args()
@@ -99,6 +104,7 @@ import cyclotron.tasks  # noqa: F401
 from cyclotron.code_state import check_out_hint, describe_changes
 from cyclotron.policy_io import resolve_policy_io
 from cyclotron.policy_loading import load_policy
+from cyclotron.robot_model import load_training_robot_model
 
 CODE_CHANGE_CONSEQUENCE = (
     "--play runs the checkpoint in an environment built from the current code, so it may behave differently than in"
@@ -133,6 +139,11 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     log_dir = os.path.dirname(resume_path)
 
     env_cfg.log_dir = log_dir
+    robot_note = None
+    if not args_cli.current_robot_model:
+        robot_loaded, robot_note = load_training_robot_model(env_cfg, log_dir)
+        if robot_loaded:
+            print(f"[INFO] {robot_loaded}")
 
     env = gym.make(args_cli.task, cfg=env_cfg, render_mode="rgb_array" if args_cli.video else None)
     # Compared where train.py saves params/: after the environment is created, which resolves parts of the config.
@@ -143,6 +154,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         agent_dict,
         CODE_CHANGE_CONSEQUENCE,
         policy_io=resolve_policy_io(env.unwrapped, agent_dict),
+        robot_model_note=robot_note,
     )
     print(changes)
     if level == "error":
