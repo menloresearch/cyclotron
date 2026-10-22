@@ -136,6 +136,39 @@ def test_untracked_files_leave_the_harness_checkout_clean(monkeypatch):
     assert harness.state()["dirty"] is False
 
 
+def test_untracked_files_in_a_submodule_leave_cyclotron_clean(tmp_path):
+    def git(*args, cwd=tmp_path / "root"):
+        return subprocess.run(["git", "-c", "user.name=test", "-c", "user.email=test@example.com", "-c", "commit.gpgsign=false",
+                               *args], cwd=cwd, check=True, capture_output=True, text=True).stdout.strip()
+    # A checkout like cyclotron's: a pinned submodule (a gitlink) beside its own files.
+    (tmp_path / "root/sub").mkdir(parents=True)
+    git("init", "-q", cwd=tmp_path / "root/sub")
+    (tmp_path / "root/sub/tracked").write_text("a")
+    git("add", "tracked", cwd=tmp_path / "root/sub")
+    git("commit", "-qm", "one", cwd=tmp_path / "root/sub")
+    pin = git("rev-parse", "HEAD", cwd=tmp_path / "root/sub")
+    git("init", "-q")
+    (tmp_path / "root/own").write_text("r")
+    git("add", "own")
+    git("update-index", "--add", "--cacheinfo", f"160000,{pin},sub")
+    git("commit", "-qm", "root")
+    def dirty():
+        return provenance.git_state(tmp_path / "root")["dirty"]
+    assert dirty() is False
+    (tmp_path / "root/sub/logs").mkdir()
+    (tmp_path / "root/sub/logs/viewer.log").write_text("untracked")
+    assert dirty() is False
+    (tmp_path / "root/sub/tracked").write_text("edited")
+    assert dirty() is True
+    git("checkout", "-q", "tracked", cwd=tmp_path / "root/sub")
+    git("commit", "-q", "--allow-empty", "-m", "two", cwd=tmp_path / "root/sub")
+    assert dirty() is True
+    git("checkout", "-q", pin, cwd=tmp_path / "root/sub")
+    assert dirty() is False
+    (tmp_path / "root/untracked").write_text("new")
+    assert dirty() is True
+
+
 @pytest.fixture
 def fake_hub(tmp_path, monkeypatch):
     monkeypatch.setenv("CYCLOTRON_CACHE_DIR", str(tmp_path / "cache"))

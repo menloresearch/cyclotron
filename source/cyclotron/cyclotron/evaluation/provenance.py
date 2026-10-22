@@ -57,7 +57,9 @@ def git_state(path, untracked=True):
     def git(*args):
         return subprocess.check_output(["git", "-C", str(path), *args], text=True, stderr=subprocess.DEVNULL).strip()
 
-    status = ["status", "--porcelain"] if untracked else ["status", "--porcelain", "--untracked-files=no"]
+    # A submodule's untracked files (HPV's viewer logs, say) leave the checkout clean; a submodule
+    # off its pin or with tracked edits still makes it dirty, as do this checkout's own untracked files.
+    status = ["status", "--porcelain", "--ignore-submodules=untracked", *([] if untracked else ["--untracked-files=no"])]
     try:
         return {"commit": git("rev-parse", "HEAD"), "dirty": bool(git(*status))}
     except (OSError, subprocess.CalledProcessError):

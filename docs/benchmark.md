@@ -146,6 +146,9 @@ Submission requires:
 - A dataset commit in the dataset's main history: a pending PR's revision
   (`@refs/pr/<n>`) is refused until the PR is merged.
 - Known, clean cyclotron and harness checkouts when the run was made.
+  Untracked files inside the HPV submodule do not make cyclotron's checkout
+  dirty; the submodule off its pin, edits to its tracked files and cyclotron's
+  own untracked files do.
 - Matching harness protocol, valid benchmark, full unique cell set, no failures,
   no test/repeat/force overrides and no unmerged shard.
 - Published task IDs in the pinned dataset's `eval.yaml`, declaring
