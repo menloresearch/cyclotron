@@ -8,7 +8,7 @@ from unittest.mock import Mock
 import pytest
 import requests
 import yaml
-from huggingface_hub.errors import EntryNotFoundError, HfHubHTTPError, RepositoryNotFoundError
+from huggingface_hub.errors import EntryNotFoundError, HfHubHTTPError, LocalEntryNotFoundError, RepositoryNotFoundError
 
 from cyclotron.evaluation import hub, publishing, runner
 from cyclotron.evaluation.harnesses.hpv import HPV
@@ -44,14 +44,19 @@ def test_commit_fallback_only_for_permission_denial(status, attempts):
         assert api.create_commit.call_args.kwargs["create_pr"] is True
 
 
-def test_existing_file_read_never_swallows_auth_failure(monkeypatch):
+def test_only_the_hubs_404_reads_as_an_absent_file(monkeypatch):
+    from huggingface_hub import errors
+
     api = Mock(endpoint="https://huggingface.co", token=None)
-    fetch = Mock(side_effect=http_error(403))
+    # The Hub's own "entry not found" (RemoteEntryNotFoundError in huggingface_hub 1.x).
+    fetch = Mock(side_effect=http_error(404, getattr(errors, "RemoteEntryNotFoundError", EntryNotFoundError)))
     monkeypatch.setattr("huggingface_hub.hf_hub_download", fetch)
-    with pytest.raises(HfHubHTTPError):
-        hub.read_repo_text(api, "org/model", "eval.yaml", SHA)
-    fetch.side_effect = http_error(404, EntryNotFoundError)
     assert hub.read_repo_text(api, "org/model", "eval.yaml", SHA) is None
+    # hf_hub_download raises LocalEntryNotFoundError, an EntryNotFoundError, for connection errors,
+    # timeouts, 5xx, 429 and 403: the file may exist, so a submission must not merge into nothing.
+    fetch.side_effect = LocalEntryNotFoundError("An error happened while trying to locate the file on the Hub")
+    with pytest.raises(LocalEntryNotFoundError):
+        hub.read_repo_text(api, "org/model", "eval.yaml", SHA)
 
 
 @pytest.fixture

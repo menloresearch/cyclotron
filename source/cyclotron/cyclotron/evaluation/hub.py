@@ -175,15 +175,24 @@ def working_copy(item, root):
 
 
 def read_repo_text(api, repo_id, path, revision, repo_type="model"):
+    """A file's text at a revision, or None only when the Hub says the file does not exist there."""
     from huggingface_hub import hf_hub_download
-    from huggingface_hub.errors import EntryNotFoundError
+    from huggingface_hub.errors import EntryNotFoundError, LocalEntryNotFoundError
 
     try:
         endpoint_key = hashlib.sha256(api.endpoint.rstrip("/").encode()).hexdigest()[:16]
         downloaded = hf_hub_download(repo_id, path, repo_type=repo_type, revision=revision,
                                      endpoint=api.endpoint, token=api.token,
                                      cache_dir=cache_root() / "hf-downloads" / endpoint_key)
-    except EntryNotFoundError:
+    except LocalEntryNotFoundError:
+        # huggingface_hub reports connection errors, timeouts, 5xx, 429 and 403 this way: the
+        # file may well exist, and treating it as absent would drop existing entries on commit.
+        raise
+    except EntryNotFoundError as error:
+        # The remote "entry not found" (RemoteEntryNotFoundError in huggingface_hub 1.x).
+        response = getattr(error, "response", None)
+        if response is None or response.status_code != 404:
+            raise
         return None
     return Path(downloaded).read_text()
 
