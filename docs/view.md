@@ -112,7 +112,9 @@ that workspace directory and prints its path. Reopening the same reference
 preserves edits instead of refreshing over them. Use the printed folder
 path when publishing, or when reopening it without contacting the Hub.
 The pinned download is never edited. A different requested revision gets
-its own working folder.
+its own working folder. Publishing a working folder checks that the dataset's
+main has not moved since the folder was copied (see
+[publishing](benchmark.md#publish-a-benchmark-folder)).
 
 Publish the saved folder with cyclotron, not the viewer's HF commands:
 

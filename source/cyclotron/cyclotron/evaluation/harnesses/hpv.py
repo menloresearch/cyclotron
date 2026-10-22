@@ -3,6 +3,7 @@
 import json
 import os
 import re
+import shlex
 import signal
 import subprocess
 import sys
@@ -80,6 +81,18 @@ class HPV:
         if refresh or not (self.path / "node_modules/vite/package.json").is_file():
             subprocess.run(["npm", "ci"], cwd=self.path, check=True)
         self._prepared = True
+
+    def fetch_history(self):
+        """Fetch upstream so HPV can say whether its commit is public (on a fetched branch): the
+        --depth 1 clone prepare() makes knows only one commit. None, or the command that failed."""
+        shallow = subprocess.run(["git", "-C", str(self.path), "rev-parse", "--is-shallow-repository"],
+                                 capture_output=True, text=True).stdout.strip() == "true"
+        command = ["git", "-C", str(self.path), "fetch", "--quiet", *(["--unshallow"] if shallow else []), "origin"]
+        if shallow:
+            print(f"Fetching {self.name}'s history to check that its commit is public (once)", flush=True)
+        if subprocess.run(command).returncode:
+            return shlex.join(command)
+        return None
 
     def env(self):
         from ..runner import DEFAULT_BENCHMARK

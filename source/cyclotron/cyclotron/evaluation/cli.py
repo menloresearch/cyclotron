@@ -117,7 +117,11 @@ def main(root, argv=None, viewing=False):
         from .publishing import publish, release
 
         if action == "publish":
-            return publish(root, args.directory, args.dataset, args.base, args.create, args.pr, args.dry_run, args.harness)
+            result = publish(root, args.directory, args.dataset, args.base, args.create, args.pr, args.dry_run, args.harness)
+            if args.dry_run and result["blockers"]:
+                # Everything is printed first; then fail, as the publication itself would.
+                raise SystemExit(1)
+            return result
         return release(root, args.dataset, args.revision, args.dry_run)
     args, policies, benchmark, options = parse_run(argv, viewing)
     from .runner import run, view

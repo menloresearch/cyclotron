@@ -133,9 +133,11 @@ def publication(tmp_path, monkeypatch, inspection):
     (directory / "data/flat/test.jsonl").write_text("{}\n")
     state = {"commit": SHA, "dirty": False}
     harness = Mock()
+    harness.name = HPV.name
     harness.state.return_value = state
     harness.inspect_benchmark.return_value = inspection
     harness.task_harness.return_value = HARNESS
+    harness.fetch_history.return_value = None
     monkeypatch.setattr(publishing, "select_harness", lambda *a, **kw: harness)
     monkeypatch.setattr(publishing, "git_state", lambda *a: state.copy())
     api = Mock(endpoint="https://huggingface.co")
@@ -221,6 +223,128 @@ def test_start_poses_upload_as_json_text_and_score_the_same(tmp_path, monkeypatc
     local, hub_form = harness.inspect_benchmark(directory), harness.inspect_benchmark(published)
     assert not local["errors"] and not hub_form["errors"]
     assert hub_form["scored_hash"] == local["scored_hash"]
+
+
+@pytest.fixture
+def existing(publication, tmp_path, monkeypatch):
+    """The dataset already exists on the Hub at SHA, published from the same suite."""
+    directory, harness, api = publication
+    previous = tmp_path / "previous"
+    previous.mkdir()
+    (previous / "benchmark.yaml").write_text("name: suite\n")
+    (previous / "README.md").write_text("---\nlicense: bsd-3-clause\n---\n\nNotes.\n")
+    api.repo_info.side_effect = lambda repo_id, repo_type, revision, **kw: SimpleNamespace(
+        id="org/suite", sha=SHA if revision == "main" else revision)
+    monkeypatch.setattr(publishing, "download", lambda reference, *a: {"path": str(previous)})
+    harness.dataset_files = HPV.dataset_files
+    return directory, harness, api, previous
+
+
+def origin(directory, sha, dataset="org/suite", endpoint="https://huggingface.co"):
+    # What hub.working_copy records when it copies a Hub dataset to edit.
+    write_json(directory / ".cyclotron-origin.json", {"identity": f"{endpoint}|{dataset}|main", "origin": {
+        "id": dataset, "repo_type": "dataset", "revision": "main", "source": "hub", "sha": sha, "endpoint": endpoint}})
+
+
+def test_a_hub_working_copy_publishes_onto_the_commit_it_was_copied_from(existing):
+    directory, harness, api, _ = existing
+    origin(directory, "b" * 40)
+    # Main moved since the copy was made: publishing it would overwrite those changes.
+    with pytest.raises(ValueError, match=f"main moved since this working copy was made from main \\({'b' * 40}\\).*--base {SHA}"):
+        publishing.publish(ROOT, directory, "org/suite", dry_run=True, api=api)
+    harness.inspect_benchmark.assert_not_called()
+    # An explicit --base is the researcher's decision; a copy of another dataset or Hub has no say.
+    assert not publishing.publish(ROOT, directory, "org/suite", base=SHA, dry_run=True, api=api)["blockers"]
+    for other in (dict(dataset="org/other"), dict(endpoint="https://private.example")):
+        origin(directory, "b" * 40, **other)
+        assert not publishing.publish(ROOT, directory, "org/suite", dry_run=True, api=api)["blockers"]
+    origin(directory, SHA, dataset="Org/Suite")
+    api.create_commit.return_value = SimpleNamespace(pr_url="https://hub/pr/1", commit_url=None, oid="c" * 40)
+    publishing.publish(ROOT, directory, "org/suite", pr=True, api=api)
+    assert api.create_commit.call_args.kwargs["parent_commit"] == SHA
+    # The origin record is cyclotron's, never uploaded.
+    assert ".cyclotron-origin.json" not in {op.path_in_repo for op in api.create_commit.call_args.kwargs["operations"]}
+
+
+def test_an_inherited_license_link_must_be_uploaded(existing):
+    directory, harness, api, previous = existing
+    inspection = harness.inspect_benchmark.return_value
+    inspection["raw"].pop("license")
+    inspection["card"].pop("license")
+    # The earlier card links a LICENSE that is not in this folder: it would be deleted as obsolete.
+    (previous / "README.md").write_text("---\nlicense: other\nlicense_link: LICENSE\n---\n\nNotes.\n")
+    (previous / "LICENSE").write_text("Terms.\n")
+    with pytest.raises(ValueError, match="license_link LICENSE is not in the upload"):
+        publishing.publish(ROOT, directory, "org/suite", dry_run=True, api=api)
+    inspection["publish_files"]["LICENSE"] = "Terms.\n"
+    result = publishing.publish(ROOT, directory, "org/suite", dry_run=True, api=api)
+    assert result["files"]["LICENSE"] == "Terms.\n" and "LICENSE" not in result["deletions"]
+    # A link to a web page names no file.
+    (previous / "README.md").write_text("---\nlicense: other\nlicense_link: https://example.com/terms\n---\n")
+    del inspection["publish_files"]["LICENSE"]
+    assert "LICENSE" in publishing.publish(ROOT, directory, "org/suite", dry_run=True, api=api)["deletions"]
+
+
+def test_publish_uses_the_staged_benchmark_yaml(publication, monkeypatch):
+    directory, harness, api = publication
+    # benchmark.yaml as first read says version 1; the staged copy the harness inspects says 2.
+    (directory / "benchmark.yaml").write_text(yaml.safe_dump({**harness.inspect_benchmark.return_value["raw"], "version": 1}))
+    selected = []
+    monkeypatch.setattr(publishing, "select_harness", lambda root, name, raw: selected.append(raw) or harness)
+    api.repo_info.side_effect = [http_error(404, RepositoryNotFoundError), SimpleNamespace(sha=SHA)]
+    api.create_commit.return_value = SimpleNamespace(pr_url=None, commit_url="https://hub/commit", oid="b" * 40)
+    api.list_repo_refs.return_value.tags = []
+    publishing.publish(ROOT, directory, "org/suite", create=True, api=api)
+    assert [raw["version"] for raw in selected] == [1, 2]
+    assert api.create_commit.call_args.kwargs["commit_message"] == "Publish suite v2"
+    assert api.create_tag.call_args.kwargs["tag"] == "v2"
+    # A harness that differs between the first read and the staged copy stops publication.
+    other = Mock()
+    other.name = "other-harness"
+    picks = iter([harness, other])
+    monkeypatch.setattr(publishing, "select_harness", lambda *a: next(picks))
+    api.repo_info.side_effect = http_error(404, RepositoryNotFoundError)
+    with pytest.raises(ValueError, match="harness changed while staging"):
+        publishing.publish(ROOT, directory, "org/other", create=True, dry_run=True, api=api)
+
+
+def test_publish_fetches_harness_history_and_says_how_when_it_cannot(publication, monkeypatch, capsys):
+    from cyclotron.evaluation import cli
+
+    directory, harness, api = publication
+    harness.inspect_benchmark.return_value["public"] = False
+    harness.fetch_history.return_value = "git -C hpv fetch --quiet --unshallow origin"
+    result = publishing.publish(ROOT, directory, "org/suite", create=True, dry_run=True, api=api)
+    harness.fetch_history.assert_called_once()
+    assert result["blockers"] == ["Harness commit is not on a fetched public upstream branch; "
+                                  "fetch the harness's history with: git -C hpv fetch --quiet --unshallow origin"]
+    # A dry run prints every blocker, then exits 1 as the publication would.
+    monkeypatch.setattr(publishing, "hub_api", lambda: api)
+    api.repo_info.side_effect = http_error(404, RepositoryNotFoundError)
+    with pytest.raises(SystemExit) as stopped:
+        cli.main(ROOT, ["publish", str(directory), "org/suite", "--create", "--dry-run"])
+    assert stopped.value.code == 1
+    assert "Publication blockers:\n  - Harness commit" in capsys.readouterr().out
+    harness.inspect_benchmark.return_value["public"] = True
+    assert cli.main(ROOT, ["publish", str(directory), "org/suite", "--create", "--dry-run"])["blockers"] == []
+
+
+@pytest.mark.parametrize("shallow,failed", [(True, False), (False, False), (True, True)])
+def test_hpv_fetches_its_full_history_for_the_public_check(monkeypatch, shallow, failed):
+    from cyclotron.evaluation.harnesses import hpv
+
+    calls = []
+    def run(command, **kwargs):
+        calls.append(command)
+        if "rev-parse" in command:
+            return SimpleNamespace(returncode=0, stdout="true\n" if shallow else "false\n")
+        return SimpleNamespace(returncode=128 if failed else 0)
+    monkeypatch.setattr(hpv.subprocess, "run", run)
+    harness = HPV(ROOT)
+    hint = harness.fetch_history()
+    fetch = ["git", "-C", str(harness.path), "fetch", "--quiet", *(["--unshallow"] if shallow else []), "origin"]
+    assert calls[-1] == fetch
+    assert hint == (" ".join(fetch) if failed else None)
 
 
 def test_publish_refuses_concurrent_ui_edit(publication):

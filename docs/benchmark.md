@@ -204,6 +204,9 @@ After saving, publish the folder with cyclotron:
 # Existing dataset: optimistic base check and optional PR
 ./cyclotron.sh --benchmark publish ./my-benchmark <org>/<dataset> --base <commit> --pr
 
+# A Hub working copy (see below) publishes onto the commit it was copied from
+./cyclotron.sh --benchmark publish logs/benchmark_workspaces/humanoid-policy-viewer/<org>__<dataset>-<key> <org>/<dataset>
+
 # After a PR is merged, tag its merged revision
 ./cyclotron.sh --benchmark release <org>/<dataset> <merged-commit>
 ```
@@ -215,7 +218,10 @@ Before writing remotely, cyclotron:
    its own validation, run plan and exact scored-content hash.
 3. Checks protocol compatibility and a clean, public harness commit, and a
    clean cyclotron checkout. Bump `benchmark.yaml`'s version when scored content
-   changes; versions cannot decrease.
+   changes; versions cannot decrease. "Public" means on a fetched upstream
+   branch, so cyclotron first fetches the harness's history (HPV is cloned with
+   `--depth 1`, which only knows its own commit); if that fetch fails, the
+   blocker gives the `git fetch` command to run.
 4. Records the harness's commit in `harness.tested_commit`, writes each test
    row in its Hub form (see [start poses](#start-poses-and-their-hub-form)),
    builds `eval.yaml` with `evaluation_framework: cyclotron` and each task's
@@ -223,6 +229,14 @@ Before writing remotely, cyclotron:
    retaining README prose and unrelated metadata.
 5. Uses an optimistic parent commit, removes obsolete benchmark files, and
    tags successful direct version releases. PRs are tagged only after merging.
+
+The parent is the dataset's current main, or `--base` if given. A Hub working
+copy, the folder `--view ... --benchmark datasets/<org>/<dataset>` makes and
+prints, records the commit it was copied from: without `--base`, publishing it
+to the same dataset (and endpoint) uses that commit as the base, so if main has
+moved since, `publish` refuses rather than overwrite those changes. Open the
+current main as a new working folder (`--benchmark datasets/<org>/<dataset>@<commit>`)
+and carry your edits over, or pass `--base <current main>` to publish over them.
 
 ### Start poses and their Hub form
 
@@ -276,11 +290,15 @@ own `tags`, not the harness's name.
 Set `license:` in `benchmark.yaml` to a Hub license ID or a publishable license
 filename such as `LICENSE` or `LICENSE.txt`. The named file must be included in
 the upload. An explicit blank means no license; an existing card's license can be retained.
+Whatever the card's `license_link` ends up naming, one kept from the existing
+card included, must be a file in the upload (a URL is fine), so a linked
+license is never deleted as obsolete.
 There is no silent license default. HPV task IDs remain `<task>_v<version>`,
 with the same config mapping and `test` split.
 
 Dry-run makes no remote writes and does not change your working folder. It
-prints generated metadata and publication blockers. Generated files, the
+prints generated metadata and publication blockers, and exits with status 1
+when there are blockers (0 when the folder is ready to publish). Generated files, the
 tested commit and Hub-form rows are staged for upload, not written over the
 folder being edited.
 If tagging fails after a successful commit, the error includes a release

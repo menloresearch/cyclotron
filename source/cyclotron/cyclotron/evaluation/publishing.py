@@ -8,7 +8,7 @@ import yaml
 
 from .harnesses.base import select_harness
 from .hub import cache_root, commit_files, download, hub_api, on_main, parse_reference, safe_name
-from .provenance import file_manifest, git_state
+from .provenance import file_manifest, git_state, read_json
 
 
 def split_card(text):
@@ -70,6 +70,17 @@ def version_check(current, previous):
         raise ValueError("Scored benchmark content changed; increase benchmark.yaml version before publishing")
 
 
+def working_origin(directory, repo_id, endpoint):
+    """The Hub commit a working copy of this dataset was made from (see hub.working_copy), if it is one."""
+    record = directory / ".cyclotron-origin.json"
+    if not record.is_file():
+        return None
+    origin = read_json(record).get("origin") or {}
+    if str(origin.get("id", "")).lower() == repo_id.lower() and origin.get("endpoint") == endpoint and origin.get("sha"):
+        return origin
+    return None
+
+
 def ensure_tag(api, repo_id, sha, version):
     name = f"v{version}"
     tags = api.list_repo_refs(repo_id, repo_type="dataset").tags
@@ -87,10 +98,11 @@ def publish(root, directory, repo_id, base=None, create=False, pr=False, dry_run
     from huggingface_hub.errors import RepositoryNotFoundError
 
     directory = Path(directory).expanduser().resolve()
-    raw = yaml.safe_load((directory / "benchmark.yaml").read_text())
-    if not isinstance(raw, dict):
+    # Read only to know which adapter inspects; everything after staging uses the staged copy.
+    unstaged = yaml.safe_load((directory / "benchmark.yaml").read_text())
+    if not isinstance(unstaged, dict):
         raise ValueError("benchmark.yaml must contain a mapping")
-    harness = select_harness(root, harness_name, raw)
+    harness = select_harness(root, harness_name, unstaged)
     harness.prepare()
     api = api or hub_api()
     target = parse_reference(repo_id, "dataset")
@@ -109,8 +121,20 @@ def publish(root, directory, repo_id, base=None, create=False, pr=False, dry_run
     if base:
         if info is None or api.repo_info(repo_id, repo_type="dataset", revision=base).sha != info.sha:
             raise ValueError("--base must still identify the dataset's current main commit")
+    elif info:
+        # A Hub working copy's base is the commit it was copied from, so newer upstream changes
+        # are never overwritten by edits made to an older copy.
+        origin = working_origin(directory, info.id, api.endpoint.rstrip("/"))
+        if origin and origin["sha"] != info.sha:
+            raise ValueError(
+                f"datasets/{info.id} main moved since this working copy was made from {origin.get('revision')} "
+                f"({origin['sha']}); main is now {info.sha}. To keep those changes, open the current main as a "
+                f"new working folder (./cyclotron.sh --view <policy> --benchmark datasets/{info.id}@{info.sha}) "
+                f"and carry your edits over; to publish this folder over them, pass --base {info.sha}")
     if info:
         previous = Path(download({"id": repo_id, "repo_type": "dataset", "revision": info.sha}, harness.dataset_files, api)["path"])
+    # The harness's public-commit check needs its upstream history, which a shallow clone lacks.
+    unfetched = harness.fetch_history()
     before = file_manifest(directory)
     temporary_root = cache_root() / "staging"
     temporary_root.mkdir(parents=True, exist_ok=True)
@@ -121,11 +145,15 @@ def publish(root, directory, repo_id, base=None, create=False, pr=False, dry_run
             raise ValueError("Benchmark folder changed while staging; save edits and retry")
         state = harness.state()
         inspection = harness.inspect_benchmark(staged, state["commit"])
+        raw = inspection["raw"]
+        if select_harness(root, harness_name, raw).name != harness.name:
+            raise ValueError("benchmark.yaml's harness changed while staging; save edits and retry")
         blockers = [*inspection["errors"], *inspection["problems"]]
         if state["dirty"] is not False or not state["commit"]:
             blockers.append("The harness checkout must have a known, clean commit")
         if inspection["public"] is not True:
-            blockers.append("Harness commit is not on a fetched public upstream branch")
+            blockers.append("Harness commit is not on a fetched public upstream branch"
+                            + (f"; fetch the harness's history with: {unfetched}" if unfetched else ""))
         cyclotron_state = git_state(root)
         if cyclotron_state["dirty"] is not False or not cyclotron_state["commit"]:
             blockers.append("The cyclotron checkout must have a known, clean commit for publication")
@@ -136,16 +164,18 @@ def publish(root, directory, repo_id, base=None, create=False, pr=False, dry_run
         # the column types the card declares), read from the staged copy checked above.
         files = {safe_name(name): text for name, text in inspection["publish_files"].items()}
         files.update(generated)
-        license_link = inspection["card"].get("license_link")
-        if license_link and license_link not in files:
-            raise ValueError("Use a publishable license filename, such as LICENSE or LICENSE.txt")
+        # The final card's link, an earlier card's included, must be uploaded, not deleted as obsolete.
+        license_link = split_card(generated["README.md"])[0].get("license_link")
+        if license_link and "://" not in str(license_link) and license_link not in files:
+            raise ValueError(f"The dataset card's license_link {license_link} is not in the upload; "
+                             "use a publishable license filename, such as LICENSE or LICENSE.txt")
         deletions = []
         if previous:
             deletions = sorted(set(harness.dataset_files(list(file_manifest(previous)))) - set(files))
         if file_manifest(directory) != before or harness.state() != state or git_state(root) != cyclotron_state:
             raise ValueError("Benchmark folder or code checkout changed during publication preparation")
         print(f"Publish {directory} -> datasets/{repo_id}")
-        print(f"Parent: {info.sha if info else '(new private repo)'}; version: {inspection['raw']['version']}")
+        print(f"Parent: {info.sha if info else '(new private repo)'}; version: {raw['version']}")
         print("Files: " + ", ".join(sorted(files)))
         if deletions:
             print("Remove obsolete dataset files: " + ", ".join(deletions))
