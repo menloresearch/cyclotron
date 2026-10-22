@@ -97,7 +97,7 @@ def submit(root, directory, pr=False, dry_run=False, api=None):
     spec = yaml.safe_load(published or "")
     if not isinstance(spec, dict) or spec.get("evaluation_framework") != "cyclotron":
         raise ValueError("The pinned dataset must declare evaluation_framework: cyclotron in eval.yaml")
-    task_ids = {task["id"] for task in spec.get("tasks", [])}
+    tasks = {task["id"]: task for task in spec.get("tasks", [])}
     proposals = []
     repos = set()
     for index, policy in enumerate(manifest["policies"]):
@@ -105,8 +105,13 @@ def submit(root, directory, pr=False, dry_run=False, api=None):
             raise ValueError("Submit one evaluated revision per model repo; this run contains repeated model repos")
         repos.add(policy["id"])
         entries = build_entries(run, manifest, f"m{index}", policy)
-        if any(entry["dataset"]["task_id"] not in task_ids for entry in entries):
-            raise ValueError("Result task IDs are not declared in the pinned dataset's eval.yaml")
+        for entry in entries:
+            task = tasks.get(entry["dataset"]["task_id"])
+            if task is None:
+                raise ValueError("Result task IDs are not declared in the pinned dataset's eval.yaml")
+            declared = (task.get("harness") or {}).get("name")
+            if declared not in (None, app.name):
+                raise ValueError(f"eval.yaml says {task['id']} is scored by {declared}, but this run used {app.name}")
         path = eval_path(dataset["id"])
         old = read_repo_text(api, policy["id"], path, policy["sha"])
         content = merge_results(old, entries)

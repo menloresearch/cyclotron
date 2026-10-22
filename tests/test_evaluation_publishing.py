@@ -13,6 +13,8 @@ from cyclotron.evaluation.provenance import file_manifest, read_json, write_json
 
 SHA = "a" * 40
 ROOT = Path(__file__).resolve().parents[1]
+HARNESS = {"name": "humanoid-policy-viewer", "repo": "https://github.com/menloresearch/humanoid-policy-viewer",
+           "protocol": 1, "commit": SHA}
 
 
 def http_error(status, cls=HfHubHTTPError):
@@ -74,14 +76,20 @@ def test_metadata_preserves_prose_and_historical_tasks(tmp_path, inspection):
     previous = tmp_path / "previous"
     previous.mkdir()
     (previous / "eval.yaml").write_text("tasks:\n- id: score_v1\n  config: all\n- id: score_v2\n  config: old\n")
-    (tmp_path / "README.md").write_text("---\ncustom: preserved\ntags: [custom]\n---\n\nResearch notes.\n")
-    generated = publishing.hub_files(inspection, tmp_path, previous)
+    (tmp_path / "README.md").write_text(
+        "---\ncustom: preserved\ntags: [custom, humanoid-policy-viewer]\n---\n\nResearch notes.\n")
+    generated = publishing.hub_files(inspection, tmp_path, previous, harness=HARNESS)
     spec = yaml.safe_load(generated["eval.yaml"])
     assert spec["evaluation_framework"] == "cyclotron"
+    assert set(spec) == {"name", "description", "evaluation_framework", "tasks"}
     assert [task["id"] for task in spec["tasks"]] == ["score_v2", "score_v1"]
+    # New tasks name their harness; a historical task keeps what it was published with.
+    assert spec["tasks"][0]["harness"] == HARNESS and "harness" not in spec["tasks"][1]
+    assert "&" not in generated["eval.yaml"]
     front, body = publishing.split_card(generated["README.md"])
     assert front["custom"] == "preserved"
-    assert front["tags"] == ["cyclotron", "custom", "humanoid-policy-viewer"]
+    # The framework is cyclotron: the app's own tag is dropped, even from an earlier card.
+    assert front["tags"] == ["cyclotron", "custom"]
     assert body == "Research notes.\n"
 
 
@@ -89,11 +97,11 @@ def test_license_requires_deliberate_choice(tmp_path, inspection):
     inspection["raw"].pop("license")
     inspection["card"].pop("license")
     with pytest.raises(ValueError, match="license"):
-        publishing.hub_files(inspection, tmp_path)
+        publishing.hub_files(inspection, tmp_path, harness=HARNESS)
     (tmp_path / "README.md").write_text("---\nlicense: mit\n---\nNotes")
-    assert "license: mit" in publishing.hub_files(inspection, tmp_path)["README.md"]
+    assert "license: mit" in publishing.hub_files(inspection, tmp_path, harness=HARNESS)["README.md"]
     inspection["raw"]["license"] = None
-    assert "license:" not in publishing.hub_files(inspection, tmp_path)["README.md"]
+    assert "license:" not in publishing.hub_files(inspection, tmp_path, harness=HARNESS)["README.md"]
 
 
 def test_tag_is_idempotent_but_never_moved():
@@ -117,6 +125,7 @@ def publication(tmp_path, monkeypatch, inspection):
     app = Mock()
     app.state.return_value = state
     app.inspect_benchmark.return_value = inspection
+    app.harness.return_value = HARNESS
     monkeypatch.setattr(publishing, "select_app", lambda *a, **kw: app)
     monkeypatch.setattr(publishing, "git_state", lambda *a: state.copy())
     api = Mock(endpoint="https://huggingface.co")
@@ -129,7 +138,10 @@ def test_publish_dry_run_does_not_mutate_folder_or_hub(publication):
     before = file_manifest(directory)
     result = publishing.publish(ROOT, directory, "org/suite", create=True, dry_run=True, api=api)
     assert not result["blockers"]
-    assert yaml.safe_load(result["files"]["eval.yaml"])["evaluation_framework"] == "cyclotron"
+    spec = yaml.safe_load(result["files"]["eval.yaml"])
+    assert spec["evaluation_framework"] == "cyclotron"
+    # The harness block records the app commit the benchmark was checked with.
+    assert app.harness.call_args.args[1] == SHA and spec["tasks"][0]["harness"] == HARNESS
     assert file_manifest(directory) == before
     api.create_repo.assert_not_called()
     api.create_commit.assert_not_called()

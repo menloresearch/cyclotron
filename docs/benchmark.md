@@ -21,7 +21,7 @@ continue to call the original Isaac Lab train/play/export scripts directly.
 ## Run a benchmark
 
 ```bash
-# Bundled default suite; exported/ is selected when given an exported run
+# The default suite (benchmarks/default); exported/ is selected when given an exported run
 ./cyclotron.sh --benchmark logs/rsl_rl/<experiment>/<run> --jobs 2
 
 # A benchmark authored locally in HPV
@@ -46,6 +46,24 @@ The default output is `logs/benchmarks/humanoid-policy-viewer/<timestamp>/`:
 are never overwritten. Use letters, digits, `_` and `-` in the final folder
 name so HPV can open it in the results viewer.
 
+### The default benchmark
+
+Without a benchmark argument, `--benchmark` runs and `--view` opens
+`benchmarks/default/`, cyclotron's own default locomotion suite. It started as
+a copy of HPV's `benchmarks/default` at `a90090b` and is maintained here from
+then on: an HPV upgrade does not change it. Its tests and scoring match HPV's
+copy at that commit; only the README differs.
+
+`--view` without `--benchmark` edits this folder in place, like any local
+folder, so a save in HPV's UI changes tracked files. Review them with
+`git diff benchmarks/default`, then commit or revert them; until then the dirty
+checkout blocks `submit` and `publish`. Bump `version` in `benchmark.yaml` when
+a change can move a score. Like any local folder, its results are local-only.
+
+HPV's **New benchmark** button still starts new suites from HPV's own bundled
+default, not this one. `tests/test_evaluation.py` validates this folder against
+the pinned HPV, so an upgrade that changes the format or protocol fails there.
+
 ### Options and app selection
 
 Known dashed flags are translated into HPV's words-only CLI; its word syntax
@@ -63,8 +81,10 @@ also works. For example, `--jobs 2` and `jobs=2` are equivalent.
 | `--watch`, `--verbose` | HPV display/debug options |
 | `--app <name>` | Explicit registered app; `CYCLOTRON_APP` is an alternative |
 
-App selection otherwise follows `harness.app` or a recognized `harness.repo`
-in `benchmark.yaml`. Legacy HPV repository identities still work. Conflicting
+App selection otherwise follows the `harness` that a published benchmark's
+`eval.yaml` tasks name (see [the harness block](#the-harness-in-evalyaml)), then
+`harness.app` or a recognized `harness.repo` in `benchmark.yaml`. Legacy HPV
+repository identities still work. Conflicting
 selections and unknown apps are rejected. Dataset URLs never install plugins.
 Saved results use their recorded app.
 
@@ -164,10 +184,39 @@ Before writing remotely, cyclotron:
    clean cyclotron checkout. Bump `benchmark.yaml`'s version when scored content
    changes; versions cannot decrease.
 4. Records the app's commit in `harness.tested_commit`, builds `eval.yaml` with
-   `evaluation_framework: cyclotron`, preserves historical task IDs, and builds
-   the dataset card while retaining README prose and unrelated metadata.
+   `evaluation_framework: cyclotron` and each task's `harness`, preserves
+   historical task IDs, and builds the dataset card while retaining README prose
+   and unrelated metadata.
 5. Uses an optimistic parent commit, removes obsolete benchmark files, and
    tags successful direct version releases. PRs are tagged only after merging.
+
+### The harness in eval.yaml
+
+Cyclotron is the evaluation framework; the app that runs and scores a benchmark
+(HPV is the first) is its harness. The
+[eval.yaml spec](https://huggingface.co/docs/hub/en/eval-results) fixes the
+top-level fields, and keeps framework-specific settings in each task, as with
+inspect-ai's `solvers` and `scorers`. So each task names its harness:
+
+```yaml
+evaluation_framework: cyclotron
+tasks:
+- id: survival_rate_v1
+  config: all
+  split: test
+  harness:
+    name: humanoid-policy-viewer
+    repo: https://github.com/menloresearch/humanoid-policy-viewer
+    protocol: 1
+    commit: a90090b716d2f121989803fe4afc7be8a45aa6c7
+```
+
+`name` is the registered app, `protocol` the scoring protocol the results are
+comparable under, and `commit` the app commit the benchmark was checked with.
+Running a published benchmark selects that app, and `submit` refuses a result
+made with a different one. Tasks from earlier versions keep the block they were
+published with. The card is tagged `cyclotron` plus the benchmark's own `tags`,
+not the app's name.
 
 Set `license:` in `benchmark.yaml` to a Hub license ID or a publishable license
 filename such as `LICENSE` or `LICENSE.txt`. The named file must be included in
@@ -196,7 +245,9 @@ cannot make that registration locally. Before live benchmark publication:
    following the current entry type and linking to this project's evaluation
    documentation. The framework identity is cyclotron; HPV is a harness.
 2. Obtain any benchmark-dataset beta/allow-list approval required by the Hub.
-3. Test registration on a private dataset before a public release.
+3. Test registration on a private dataset before a public release, including
+   that the per-task `harness` block passes the Hub's push-time validation
+   (other frameworks' per-task fields, such as `lower_is_better`, already do).
 
 No registration PR, approval or live publication is implied by this code.
 Local editing/runs and metadata dry-runs work independently; the Hub may reject

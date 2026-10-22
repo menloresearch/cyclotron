@@ -95,10 +95,16 @@ class HPV:
             if completed.returncode:
                 raise ValueError(completed.stderr.strip() or completed.stdout.strip())
             return json.loads(completed.stdout)
+        # Piped or logged output is block-buffered; print what we said before the app does.
+        sys.stdout.flush()
+        sys.stderr.flush()
         process = subprocess.Popen(command, cwd=self.path, env=self.env())
-        previous = {}
+        previous, received = {}, []
         def forward(signum, frame):
-            if process.poll() is None:
+            received.append(signum)
+            # Ctrl+C already reaches the app through the terminal's process group, and a
+            # second SIGINT would cut its graceful shutdown short; forward only SIGTERM.
+            if signum != signal.SIGINT and process.poll() is None:
                 process.send_signal(signum)
         try:
             for sig in (signal.SIGINT, signal.SIGTERM):
@@ -107,6 +113,9 @@ class HPV:
         finally:
             for sig, handler in previous.items():
                 signal.signal(sig, handler)
+        if received:
+            # A deliberate stop, not an app failure: exit quietly with 130.
+            raise KeyboardInterrupt
         if status:
             raise subprocess.CalledProcessError(status, command)
 
@@ -138,6 +147,11 @@ class HPV:
 
     def task_specs(self, inspection):
         return inspection["tasks"]
+
+    def harness(self, inspection, commit):
+        # Each eval.yaml task names the app that runs and scores it, under the benchmark's protocol.
+        protocol = (inspection["raw"].get("harness") or {}).get("protocol")
+        return {"name": self.name, "repo": self.repo, "protocol": protocol, "commit": commit}
 
     def inspect_policy(self, item):
         info = self.execute([self.root / "scripts/apps/hpv-inspect.mjs", self.path, "policy", item["path"]], capture=True)

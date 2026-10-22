@@ -83,6 +83,22 @@ def test_adapter_registry(monkeypatch):
         select_app(ROOT, "other")
 
 
+def test_published_harness_selects_the_app(monkeypatch):
+    monkeypatch.delenv("CYCLOTRON_APP", raising=False)
+    def spec(*names):
+        return {"tasks": [{"id": f"t{i}", **({"harness": {"name": n}} if n else {})} for i, n in enumerate(names)]}
+    legacy = {"harness": {"repo": HPV.repo}}
+    assert select_app(ROOT, spec=spec(HPV.name)).name == HPV.name
+    assert select_app(ROOT, benchmark=legacy, spec=spec(None)).name == HPV.name
+    for raw, published in ((legacy, spec("other")), ({}, spec(HPV.name, "other")), ({}, spec("other"))):
+        with pytest.raises(ValueError):
+            select_app(ROOT, benchmark=raw, spec=published)
+    with pytest.raises(ValueError, match="conflicts"):
+        select_app(ROOT, "other", spec=spec(HPV.name))
+    block = HPV(ROOT).harness({"raw": {"harness": {"protocol": 1}}}, SHA)
+    assert block == {"name": HPV.name, "repo": HPV.repo, "protocol": 1, "commit": SHA}
+
+
 def test_manifest_rejects_symlinks_and_missing_files(tmp_path):
     (tmp_path / "a").write_text("hello")
     assert provenance.file_manifest(tmp_path) == {"a": hashlib.sha256(b"hello").hexdigest()}
@@ -119,6 +135,8 @@ def test_cache_pins_verifies_and_materializes(fake_hub):
     item = hub.download(reference, HPV.model_files, api)
     assert item["sha"] == SHA
     assert fetch.call_args.kwargs["revision"] == SHA
+    # HPV labels a policy by its folder name: the repo, as HPV's own Hub download did.
+    assert Path(item["path"]).name == "org__model" and Path(item["path"]).parent.name == SHA
     assert not (Path(item["path"]) / "policy.onnx").is_symlink()
     assert "params/tracking_policy.json" in item["files"]
     assert hub.download(reference, HPV.model_files, api)["files"] == item["files"]
@@ -150,7 +168,8 @@ def test_working_copy_preserves_edits(tmp_path):
     source = tmp_path / "source"
     source.mkdir()
     (source / "benchmark.yaml").write_text("original")
-    item = {"path": str(source), "id": "org/suite", "sha": SHA, "revision": "main", "source": "hub"}
+    item = {"path": str(source), "id": "org/suite", "sha": SHA, "revision": "main", "source": "hub",
+            "endpoint": "https://huggingface.co"}
     working = hub.working_copy(item, tmp_path / "workspaces")
     (working / "benchmark.yaml").write_text("edited")
     again = hub.working_copy({**item, "sha": "b" * 40}, tmp_path / "workspaces")
@@ -234,7 +253,8 @@ def test_eval_yaml_merge_and_quoted_date(recorded_result):
         build_entries(run, manifest, "m0", manifest["policies"][0])
 
 
-def test_submit_dry_run_pinned_inputs_and_no_writes(recorded_result, tmp_path, monkeypatch):
+@pytest.mark.parametrize("harness", ["", "\n  harness: {name: humanoid-policy-viewer}", "\n  harness: {name: other-app}"])
+def test_submit_dry_run_pinned_inputs_and_no_writes(recorded_result, tmp_path, monkeypatch, harness):
     from cyclotron.evaluation import eval_results
 
     run, manifest = recorded_result
@@ -242,14 +262,19 @@ def test_submit_dry_run_pinned_inputs_and_no_writes(recorded_result, tmp_path, m
     manifest["result_sha256"] = provenance.sha256(tmp_path / "result.json")
     provenance.write_json(tmp_path / "cyclotron.json", manifest)
     monkeypatch.setattr(eval_results, "download", lambda ref, *a, **kw: {"sha": ref["revision"], "files": {}})
-    read = Mock(side_effect=["evaluation_framework: cyclotron\ntasks:\n- id: score_v1", None])
+    read = Mock(side_effect=[f"evaluation_framework: cyclotron\ntasks:\n- id: score_v1{harness}", None])
     monkeypatch.setattr(eval_results, "read_repo_text", read)
     commit = Mock()
     monkeypatch.setattr(eval_results, "commit_files", commit)
     api = Mock(endpoint="https://huggingface.co")
-    assert len(submit(ROOT, tmp_path, dry_run=True, api=api)) == 1
+    if "other-app" in harness:
+        # A task's results only count from the harness its eval.yaml names.
+        with pytest.raises(ValueError, match="scored by other-app"):
+            submit(ROOT, tmp_path, dry_run=True, api=api)
+    else:
+        assert len(submit(ROOT, tmp_path, dry_run=True, api=api)) == 1
+        assert read.call_args.args[3] == SHA
     commit.assert_not_called()
-    assert read.call_args.args[3] == SHA
 
 
 def test_native_results_cannot_be_adopted(tmp_path):
@@ -276,3 +301,48 @@ def test_child_args_are_local_and_headless(monkeypatch, tmp_path):
     env = app.env()
     assert env["HPV_BENCHMARKS_DIR"].startswith(str(ROOT / "logs"))
     assert "HF_TOKEN" not in env
+
+
+def test_default_benchmark_is_cyclotrons_own_and_opens_in_place(monkeypatch, tmp_path):
+    monkeypatch.setattr(HPV, "prepare", lambda self: None)
+    app, item = runner.resolve_benchmark(ROOT, None)
+    assert Path(item["path"]) == ROOT / "benchmarks/default"
+    assert app.name == HPV.name and {"benchmark.yaml", "data/locomotion/test.jsonl"} <= set(item["files"])
+    monkeypatch.setattr(runner, "resolve_input", lambda *a: {"path": str(tmp_path / "policy")})
+    monkeypatch.setattr(runner, "working_copy", Mock(side_effect=AssertionError("the default was copied")))
+    opened = Mock()
+    monkeypatch.setattr(HPV, "view", lambda self, policy, benchmark, options: opened(benchmark))
+    runner.view(ROOT, "org/model")
+    opened.assert_called_once_with(str(ROOT / "benchmarks/default"))
+
+
+@pytest.mark.skipif(not __import__("shutil").which("node")
+                    or not (ROOT / "third_party/humanoid-policy-viewer/node_modules/yaml").is_dir(),
+                    reason="needs node and the app's npm dependencies")
+def test_default_benchmark_is_valid_for_the_pinned_app(monkeypatch, tmp_path):
+    # After an app upgrade, this is what says cyclotron's own copy needs updating.
+    monkeypatch.setenv("CYCLOTRON_CACHE_DIR", str(tmp_path))
+    app = HPV(ROOT)
+    monkeypatch.setattr(app, "prepare", lambda: None)
+    inspection = app.inspect_benchmark(ROOT / "benchmarks/default")
+    assert not inspection["errors"] and not inspection["problems"]
+    assert [task["id"] for task in inspection["tasks"]] == ["survival_rate_v1", "survival_time_v1"]
+
+
+@pytest.mark.skipif(not __import__("shutil").which("node"), reason="needs node")
+@pytest.mark.parametrize("sig,forwarded", [("SIGTERM", True), ("SIGINT", False)])
+def test_stopping_the_app_is_quiet_and_signals_it_once(monkeypatch, tmp_path, capfd, sig, forwarded):
+    import os
+    import signal
+    import threading
+
+    monkeypatch.setenv("CYCLOTRON_CACHE_DIR", str(tmp_path))
+    app = HPV(ROOT)
+    monkeypatch.setattr(app, "prepare", lambda: None)
+    # Ctrl+C reaches the app through the terminal itself; only the wrapper is signalled here.
+    child = ("for (const s of ['SIGINT', 'SIGTERM']) process.on(s, () => { console.log('got ' + s); process.exit(130); });"
+             "setTimeout(() => process.exit(0), 1500);")
+    threading.Timer(0.5, os.kill, (os.getpid(), getattr(signal, sig))).start()
+    with pytest.raises(KeyboardInterrupt):
+        app.execute(["-e", child])
+    assert ("got " + sig in capfd.readouterr().out) is forwarded

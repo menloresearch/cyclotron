@@ -55,7 +55,7 @@ Options after the argument:
 | `--revision <ref>` | Branch, tag or commit of a Hub repo (default: `main`). Ignored for local paths. |
 | `--port <n>` | Dev server port (default: 3000, or the next free one). |
 | `--no-open` | Do not open a browser window. Added automatically over SSH or without a display. |
-| `--benchmark <folder or datasets/org/name[@rev]>` | Open this benchmark in HPV's existing editor. A local folder is edited in place; a Hub dataset gets a separate writable copy. |
+| `--benchmark <folder or datasets/org/name[@rev]>` | Open this benchmark in HPV's existing editor (default: cyclotron's `benchmarks/default`). A local folder is edited in place; a Hub dataset gets a separate writable copy. |
 | `--app <name>` | Select a registered app (currently `humanoid-policy-viewer`); also configurable through `CYCLOTRON_APP`. |
 
 Private or gated Hub repos need `hf auth login` or `HF_TOKEN` set. Cyclotron's
@@ -75,11 +75,15 @@ cache causes an error; move the named revision folder aside and retry.
 The folder must already contain `benchmark.yaml` and its `data/` files.
 HPV provides all editing, test creation, task configuration and preview UI,
 and saves directly into that folder. Cyclotron does not replace the editor.
-To start a new benchmark, open the viewer without `--benchmark` and use its
-**New benchmark** UI. New folders live under
-`logs/benchmark_workspaces/humanoid-policy-viewer/`.
+To start a new benchmark, use the viewer's **New benchmark** UI. New folders
+live under `logs/benchmark_workspaces/humanoid-policy-viewer/` and start from
+HPV's own bundled default.
 
-Opening a Hub benchmark, or the bundled default, creates a writable copy in
+Without `--benchmark`, the viewer opens cyclotron's default suite,
+`benchmarks/default/`, in place: saving in the UI changes tracked files in this
+repository (see [the default benchmark](benchmark.md#the-default-benchmark)).
+
+Opening a Hub benchmark creates a writable copy in
 that workspace directory and prints its path. Reopening the same reference
 preserves edits instead of refreshing over them. Use the printed folder
 path when publishing, or when reopening it without contacting the Hub.

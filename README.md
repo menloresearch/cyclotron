@@ -234,7 +234,7 @@ without uploading.
 ## Benchmark a policy ([docs](docs/benchmark.md))
 
 ```bash
-# Run a local suite or the bundled default (omit ./my-benchmark)
+# Run a local suite, or cyclotron's default suite in benchmarks/default (omit ./my-benchmark)
 ./cyclotron.sh --benchmark <org>/<model> ./my-benchmark --jobs 2
 
 # Inspect the output

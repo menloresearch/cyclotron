@@ -13,11 +13,22 @@ class HarnessAdapter(Protocol):
     def run(self, policies, benchmark, output, options): ...
     def view_result(self, directory, options): ...
     def inspect_benchmark(self, directory, commit=None): ...
+    def harness(self, inspection, commit): ...
     def normalize_result(self, result): ...
     def submit_blockers(self, result, manifest): ...
 
 
-def select_app(root, explicit=None, benchmark=None):
+def eval_harness(spec):
+    """The app eval.yaml's tasks name in their harness block; None for benchmarks published without one."""
+    blocks = [task["harness"] for task in (spec or {}).get("tasks", [])
+              if isinstance(task, dict) and isinstance(task.get("harness"), dict)]
+    names = {block.get("name") for block in blocks}
+    if None in names or len(names) > 1:
+        raise ValueError(f"eval.yaml tasks must name one harness, not {sorted(map(str, names))}")
+    return next(iter(names), None)
+
+
+def select_app(root, explicit=None, benchmark=None, spec=None):
     from .hpv import HPV
 
     registry = {HPV.name: HPV}
@@ -30,8 +41,12 @@ def select_app(root, explicit=None, benchmark=None):
         raise ValueError(f"No installed adapter for harness repository {repository}")
     if declared and by_repo and declared != by_repo:
         raise ValueError("harness.app conflicts with harness.repo")
-    selected = explicit or os.environ.get("CYCLOTRON_APP")
     expected = declared or by_repo
+    published = eval_harness(spec)
+    if published and expected and published != expected:
+        raise ValueError(f"eval.yaml's harness {published} conflicts with benchmark.yaml's {expected}")
+    expected = published or expected
+    selected = explicit or os.environ.get("CYCLOTRON_APP")
     if selected and expected and selected != expected:
         raise ValueError(f"Requested app {selected} conflicts with benchmark app {expected}")
     name = selected or expected or HPV.name

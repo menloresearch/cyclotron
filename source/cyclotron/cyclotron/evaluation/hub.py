@@ -114,7 +114,9 @@ def download(reference, select_files, api=None):
         raise ValueError(f"No supported input files in {reference['id']}")
     endpoint = api.endpoint.rstrip("/")
     endpoint_key = hashlib.sha256(endpoint.encode()).hexdigest()[:16]
-    destination = cache_root() / "hub" / endpoint_key / reference["repo_type"] / reference["id"] / sha
+    # Apps label a policy by its real folder name, so the leaf names the repo, not the commit.
+    destination = (cache_root() / "hub" / endpoint_key / reference["repo_type"] / reference["id"] / sha
+                   / reference["id"].replace("/", "__"))
     destination.parent.mkdir(parents=True, exist_ok=True)
     with FileLock(str(destination) + ".lock"):
         # Check bytes against the pinned remote metadata even when reusing the cache.
@@ -148,13 +150,13 @@ def download(reference, select_files, api=None):
 
 
 def working_copy(item, root):
-    """A stable editable copy; never refresh over a researcher's edits."""
+    """A stable editable copy of a Hub dataset; never refresh over a researcher's edits."""
     from filelock import FileLock
 
     root = Path(root)
-    identity = f"{item.get('endpoint', '')}|{item.get('id', item['path'])}|{item.get('revision', 'bundled')}"
+    identity = f"{item['endpoint']}|{item['id']}|{item['revision']}"
     key = hashlib.sha256(identity.encode()).hexdigest()[:12]
-    label = item.get("id", "default").replace("/", "__")
+    label = item["id"].replace("/", "__")
     destination = root / f"{label}-{key}"
     root.mkdir(parents=True, exist_ok=True)
     with FileLock(str(destination) + ".lock"):

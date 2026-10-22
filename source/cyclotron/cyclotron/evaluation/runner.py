@@ -9,23 +9,28 @@ from .apps.base import select_app
 from .hub import resolve_input, working_copy
 from .provenance import SCHEMA, file_manifest, git_state, read_json, sha256, write_json
 
+# Cyclotron's own default suite, maintained in this repository rather than read from an app.
+DEFAULT_BENCHMARK = "benchmarks/default"
+
 
 def resolve_benchmark(root, target, app_name=None):
     adapter = select_app(root, app_name)
     if target:
         item = resolve_input(target, "dataset", adapter.dataset_files)
-        directory = Path(item["path"])
-        if not directory.is_dir() or not (directory / "benchmark.yaml").is_file():
-            raise ValueError(f"Not a benchmark folder: {directory}")
-        raw = yaml.safe_load((directory / "benchmark.yaml").read_text())
-        if not isinstance(raw, dict):
-            raise ValueError("benchmark.yaml must contain a mapping")
-        adapter = select_app(root, app_name, raw)
-        adapter.prepare()
     else:
-        adapter.prepare()
-        directory = adapter.path / "benchmarks/default"
-        item = {"source": "local", "repo_type": "dataset", "path": str(directory)}
+        item = {"source": "local", "repo_type": "dataset", "path": str(Path(root).resolve() / DEFAULT_BENCHMARK)}
+    directory = Path(item["path"])
+    if not directory.is_dir() or not (directory / "benchmark.yaml").is_file():
+        raise ValueError(f"Not a benchmark folder: {directory}")
+    raw = yaml.safe_load((directory / "benchmark.yaml").read_text())
+    if not isinstance(raw, dict):
+        raise ValueError("benchmark.yaml must contain a mapping")
+    # Published benchmarks name their harness in eval.yaml; local folders have none until publication.
+    spec = yaml.safe_load((directory / "eval.yaml").read_text()) if (directory / "eval.yaml").is_file() else None
+    if spec is not None and not isinstance(spec, dict):
+        raise ValueError("eval.yaml must contain a mapping")
+    adapter = select_app(root, app_name, raw, spec)
+    adapter.prepare()
     item["files"] = file_manifest(directory)
     return adapter, item
 
@@ -33,9 +38,9 @@ def resolve_benchmark(root, target, app_name=None):
 def view(root, policy, benchmark=None, app_name=None, revision=None, options=()):
     app, dataset = resolve_benchmark(root, benchmark, app_name)
     model = resolve_input(policy, "model", app.model_files, revision)
-    # The bundle and pinned Hub cache are never edited by the viewer.
+    # The pinned Hub cache is never edited; local folders, the default included, are edited in place.
     directory = dataset["path"]
-    if dataset["source"] == "hub" or benchmark is None:
+    if dataset["source"] == "hub":
         directory = working_copy(dataset, app.workspaces)
     return app.view(model["path"], str(directory), options)
 

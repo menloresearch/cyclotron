@@ -1,0 +1,24 @@
+# What runs and how it is scored. Tests live in data/<category>/test.jsonl, one per line.
+# Reference: humanoid-policy-viewer docs/benchmarks.md
+name: default
+title: default
+description: A few basic tests to check that the policy is running properly.
+version: 1                      # bump whenever a change can move a score
+harness:
+  repo: https://github.com/menloresearch/humanoid-policy-viewer
+  protocol: 1
+  tested_commit: 8bcbf47d6e7b206e1a9527029eab0fb2326630eb
+requires:
+  robot: { name: asimov-1 }
+  policy_interface: velocity-command
+defaults:
+  repeats: 5                    # each repeat draws its own seeded randomisation
+  seed: 0
+  randomize: { action_delay: env_range, initial_joint_noise_rad: 0.02 }
+  timeout_s: 600
+tests:                          # { all: true }, { config: <category> } or { id: <category>/<name> }
+  - { all: true }
+tasks:                          # leaderboard numbers; _v<version> is appended to each id
+  - { id: survival_rate, metric: survival_rate@1 }    # scope: { config, id, tag } narrows a task
+  - { id: survival_time, metric: survival_time@1 }
+reference_policies: []          # policies `npm run hf baseline` compares
