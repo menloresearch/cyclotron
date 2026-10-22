@@ -75,6 +75,8 @@ cache causes an error; move the named revision folder aside and retry.
 The folder must already contain `benchmark.yaml` and its `data/` files.
 HPV provides all editing, test creation, task configuration and preview UI,
 and saves directly into that folder. Cyclotron does not replace the editor.
+A test's Environment tab also sets where the robot starts and whether it drops
+and settles first (see [start poses](benchmark.md#start-poses-and-their-hub-form)).
 To start a new benchmark, use the viewer's **New benchmark** UI. New folders
 live under `logs/benchmark_workspaces/humanoid-policy-viewer/` and start from
 HPV's own bundled default.

@@ -66,6 +66,26 @@ HPV's **New benchmark** button still starts new suites from HPV's own bundled
 default, not this one. `tests/test_evaluation.py` validates this folder against
 the pinned HPV, so an upgrade that changes the format or protocol fails there.
 
+### Scoring protocol 2
+
+The pinned HPV implements scoring protocol 2, and runs a benchmark only when its
+`harness.protocol` is 2 (`--force` runs others, locally only). Protocol 2 adds
+metrics that judge a run by how it ends, so a robot that falls and gets back up
+survives:
+
+| Metric | One run (test x repeat) |
+| --- | --- |
+| `survival_rate@2` | 1 if the robot is up in the last frame (and reached the end zone, if the test has one), else 0 |
+| `survival_time@2` | 1 if it is up at the end, else the fraction of the test before it last went down (0 if it never stood) |
+| `survival_rate@1`, `survival_time@1` | Kept: any fall fails the run, and time counts to the first fall |
+
+A fall is the base below 0.35 m or the torso tilted past 78.5°. The `@2`
+metrics work whatever the test's start pose: a robot that starts lying down is
+"down" from the first frame, which `@1` counts as a fall at t = 0. To move a
+protocol-1 benchmark over, set `harness.protocol: 2`, switch its tasks' metrics
+to `@2` and bump `version`, as `benchmarks/default` did. See HPV's
+[metrics](https://github.com/menloresearch/humanoid-policy-viewer/blob/main/docs/benchmarks.md#metrics-and-repeats).
+
 ### Options and harness selection
 
 Known dashed flags are translated into HPV's words-only CLI; its word syntax
@@ -185,12 +205,34 @@ Before writing remotely, cyclotron:
 3. Checks protocol compatibility and a clean, public harness commit, and a
    clean cyclotron checkout. Bump `benchmark.yaml`'s version when scored content
    changes; versions cannot decrease.
-4. Records the harness's commit in `harness.tested_commit`, builds `eval.yaml` with
-   `evaluation_framework: cyclotron` and each task's `harness`, preserves
-   historical task IDs, and builds the dataset card while retaining README prose
-   and unrelated metadata.
+4. Records the harness's commit in `harness.tested_commit`, writes each test
+   row in its Hub form (see [start poses](#start-poses-and-their-hub-form)),
+   builds `eval.yaml` with `evaluation_framework: cyclotron` and each task's
+   `harness`, preserves historical task IDs, and builds the dataset card while
+   retaining README prose and unrelated metadata.
 5. Uses an optimistic parent commit, removes obsolete benchmark files, and
    tags successful direct version releases. PRs are tagged only after merging.
+
+### Start poses and their Hub form
+
+A test row can say where the robot starts. `start` takes the shape of the
+robot's `init_state` in `env.yaml`: `pos`, `rot` (w, x, y, z), `lin_vel`,
+`ang_vel`, and `joint_pos`/`joint_vel` keyed by joint names or patterns. The
+keys it gives replace the policy's own `init_state`; `null` starts from the
+policy's own. `drop_settle_s` (seconds, at most 10, or `null` for off) leaves
+the robot limp until it comes to rest before the test's clock starts.
+
+Author both in HPV's editor: the test's Environment tab offers the start poses
+Policy default, Standing and Lying on back, and a Drop and settle checkbox with
+its duration. Anything finer is written into the row by hand; see HPV's
+[test row](https://github.com/menloresearch/humanoid-policy-viewer/blob/main/docs/benchmarks.md#a-test-one-row).
+
+Locally, `test.jsonl` holds `start` as a JSON object. On the Hub it is JSON
+text, because a dataset card cannot declare a map keyed by joint patterns, so
+the card declares the column a string. `publish` uploads each row in that form:
+the harness gives cyclotron every file as it is to be published. HPV reads both
+forms, so a published benchmark has the same scored-content hash as the folder
+it came from.
 
 ### The harness in eval.yaml
 
@@ -203,14 +245,14 @@ inspect-ai's `solvers` and `scorers`. So each task names its harness:
 ```yaml
 evaluation_framework: cyclotron
 tasks:
-- id: survival_rate_v1
+- id: survival_rate_v2
   config: all
   split: test
   harness:
     name: humanoid-policy-viewer
     repo: https://github.com/menloresearch/humanoid-policy-viewer
-    protocol: 1
-    commit: a90090b716d2f121989803fe4afc7be8a45aa6c7
+    protocol: 2
+    commit: 4e62f702ba45f357e1bc1dfc8c94e39de2cf8fa2
 ```
 
 `name` is the registered harness, `protocol` the scoring protocol the results
@@ -227,8 +269,9 @@ There is no silent license default. HPV task IDs remain `<task>_v<version>`,
 with the same config mapping and `test` split.
 
 Dry-run makes no remote writes and does not change your working folder. It
-prints generated metadata and publication blockers. Generated files and the
-tested commit are staged for upload, not written over the folder being edited.
+prints generated metadata and publication blockers. Generated files, the
+tested commit and Hub-form rows are staged for upload, not written over the
+folder being edited.
 If tagging fails after a successful commit, the error includes a release
 command to retry. Existing tags are never moved.
 
