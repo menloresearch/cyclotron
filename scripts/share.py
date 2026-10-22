@@ -211,11 +211,12 @@ def main() -> None:
         return
 
     try:
-        from huggingface_hub import CommitOperationAdd, CommitOperationDelete, HfApi
+        from huggingface_hub import CommitOperationAdd, CommitOperationDelete
+        from cyclotron.evaluation.hub import hub_api
     except ImportError:
         sys.exit("[ERROR] huggingface_hub is not installed. Install it with: ./cyclotron.sh --install")
 
-    api = HfApi()
+    api = hub_api()
     try:
         user = api.whoami()["name"]
     except Exception:

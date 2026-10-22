@@ -21,7 +21,7 @@ setup(
     packages=find_packages(),
     package_data={"cyclotron": ["tasks/locomotion/motions/*.npz"]},
     include_package_data=True,
-    install_requires=["numpy<2", "rsl-rl-lib==5.0.1", "huggingface_hub", "onnx", "onnxruntime", "onnxscript"],
+    install_requires=["numpy<2", "rsl-rl-lib==5.0.1", "huggingface_hub>=0.36,<2", "PyYAML>=6", "filelock>=3", "onnx", "onnxruntime", "onnxscript"],
     python_requires=">=3.10",
     classifiers=[
         "Natural Language :: English",

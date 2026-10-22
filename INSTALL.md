@@ -151,10 +151,38 @@ extension in editable mode:
 ./cyclotron.sh --install
 ```
 
-### Policy viewer (optional)
+### Viewing and benchmarking only (optional)
 
-`./cyclotron.sh --view` runs in the browser through the
-`third_party/humanoid-policy-viewer` submodule and needs only Node.js 20 or
-newer, not this Python environment. It fetches the submodule, its npm
-dependencies and its own copy of the robot model on first use, so nothing
-needs to be installed ahead of time.
+You do not need Isaac Lab, Isaac Sim, torch or a training GPU to use
+`--view` and `--benchmark`. Install Python 3.10+ and
+[Node.js 20+](https://nodejs.org) (including npm), then from the repo root:
+
+```bash
+python -m venv .venv-eval
+source .venv-eval/bin/activate
+python -m pip install -r requirements-eval.txt
+./cyclotron.sh --view <org>/<model>
+```
+
+Skip the separate environment if using the full training installation.
+`PYTHON_EXE=/path/to/python` selects another interpreter. The entry scripts
+also work directly: `python scripts/view.py ...` and
+`python scripts/benchmark.py ...`; no editable package install is necessary.
+
+Cyclotron uses Python for orchestration and all Hugging Face operations.
+HPV still needs Node for its server and benchmark runner; the UI runs in the
+browser. There is no TUI. Cyclotron checks Node's version but does **not**
+install Node or silently install missing Python packages.
+
+On first use, cyclotron automatically fetches the pinned
+`third_party/humanoid-policy-viewer` submodule and runs `npm ci`. Viewing
+and running benchmarks also fetch HPV's robot assets; the first benchmark
+run installs Playwright Chromium. These downloads require network access.
+If Chromium reports missing Linux system libraries, follow Playwright's
+installation guidance; cyclotron does not run privileged OS installers.
+
+When cyclotron's submodule pin changes, the next use updates a clean HPV
+checkout and refreshes its npm dependencies. Local changes are left alone
+with a warning. Inspection for publication needs npm dependencies, but not
+robot assets or Chromium. See [viewing](docs/view.md) and
+[benchmarking/publication](docs/benchmark.md) for storage and commands.

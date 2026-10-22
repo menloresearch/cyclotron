@@ -21,9 +21,11 @@ Or view a run you exported with [`--export`](export.md):
 ./cyclotron.sh --view logs/rsl_rl/<experiment_name>/<run>
 ```
 
-The only requirement is [Node.js](https://nodejs.org) 20 or newer. The first
-run fetches the `third_party/humanoid-policy-viewer` submodule, its npm
-dependencies and the Asimov 1 robot model; after a pull that moves the
+Requirements are Python 3.10+ with `pip install -r requirements-eval.txt`
+and [Node.js](https://nodejs.org) 20 or newer with npm. No training environment
+is needed; see [standalone installation](../INSTALL.md#viewing-and-benchmarking-only-optional).
+The first run fetches the `third_party/humanoid-policy-viewer` submodule, its
+npm dependencies and the Asimov 1 robot model; after a pull that moves the
 submodule, the next run updates it and its dependencies (unless it has
 uncommitted changes, which are left alone with a warning). The viewer then checks the policy,
 starts a local server and opens the browser with the policy selected (over SSH
@@ -37,7 +39,7 @@ velocity and push the robot.
 
 | Argument | What runs |
 | --- | --- |
-| `<org>/<model>` | A Hub repo, for example one uploaded with [`--share`](share.md). `policy.onnx`, `env.yaml` and `agent.yaml` are downloaded to `~/.cache/humanoid-policy-viewer/hf/` and checked. |
+| `<org>/<model>[@revision]` | A Hub repo, for example one uploaded with [`--share`](share.md). Cyclotron resolves its commit and downloads the ONNX and configuration files into its cache, then passes a local path to HPV. |
 | A local path | Runs in place, with no download: a run folder (its `exported/`, written by [`--export`](export.md)), any folder holding `policy.onnx` and `env.yaml`, or an `.onnx` file. |
 
 A run folder argument descends into `<run>/exported` when the folder itself
@@ -53,8 +55,47 @@ Options after the argument:
 | `--revision <ref>` | Branch, tag or commit of a Hub repo (default: `main`). Ignored for local paths. |
 | `--port <n>` | Dev server port (default: 3000, or the next free one). |
 | `--no-open` | Do not open a browser window. Added automatically over SSH or without a display. |
+| `--benchmark <folder or datasets/org/name[@rev]>` | Open this benchmark in HPV's existing editor. A local folder is edited in place; a Hub dataset gets a separate writable copy. |
+| `--app <name>` | Select a registered app (currently `humanoid-policy-viewer`); also configurable through `CYCLOTRON_APP`. |
 
-Private or gated Hub repos need `HF_TOKEN` set.
+Private or gated Hub repos need `hf auth login` or `HF_TOKEN` set. Cyclotron's
+Python SDK handles authentication, not HPV. `HF_ENDPOINT` selects another Hub.
+
+Downloads live under `~/.cache/cyclotron/` (or `$XDG_CACHE_HOME/cyclotron`),
+overridden by `CYCLOTRON_CACHE_DIR`. Inputs are separated by endpoint, repo
+type, repository and resolved commit, and verified before reuse. A corrupt
+cache causes an error; move the named revision folder aside and retry.
+
+### Edit a benchmark in HPV
+
+```bash
+./cyclotron.sh --view <org>/<model> --benchmark ./my-benchmark
+```
+
+The folder must already contain `benchmark.yaml` and its `data/` files.
+HPV provides all editing, test creation, task configuration and preview UI,
+and saves directly into that folder. Cyclotron does not replace the editor.
+To start a new benchmark, open the viewer without `--benchmark` and use its
+**New benchmark** UI. New folders live under
+`logs/benchmark_workspaces/humanoid-policy-viewer/`.
+
+Opening a Hub benchmark, or the bundled default, creates a writable copy in
+that workspace directory and prints its path. Reopening the same reference
+preserves edits instead of refreshing over them. Use the printed folder
+path when publishing, or when reopening it without contacting the Hub.
+The pinned download is never edited. A different requested revision gets
+its own working folder.
+
+Publish the saved folder with cyclotron, not the viewer's HF commands:
+
+```bash
+./cyclotron.sh --benchmark publish ./my-benchmark <org>/<dataset> --create --dry-run
+```
+
+See [benchmark publication](benchmark.md#publish-a-benchmark-folder) for
+validation, licensing, versioning and live publication. Browser-generated
+results are saved under cyclotron's results directory, but are currently
+local-only: use the cyclotron benchmark command for submittable run provenance.
 
 ### What the viewer runs, and what it refuses
 
