@@ -333,7 +333,7 @@ def main():
         log(f"[INFO] Set the policy settings back to the ones in the run's {' and '.join(saved)}.")
     # After the restore, which can bring back a network config of another kind (e.g. an LSTM actor).
     agent_cfg = handle_deprecated_rsl_rl_cfg(agent_cfg, installed_version)
-    robot_loaded, robot_note = load_training_robot_model(env_cfg, run_dir)
+    robot_loaded, robot_note = load_training_robot_model(env_cfg, run_dir, log)
     if robot_loaded:
         log(f"[INFO] {robot_loaded}")
 

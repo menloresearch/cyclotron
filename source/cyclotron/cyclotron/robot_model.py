@@ -31,6 +31,8 @@ import urllib.parse
 from cyclotron.code_state import _git, _sha256, _short, training_robot_model
 
 MODEL_DIR_VARIABLE = "ASIMOV_1_MODEL_DIR"
+# The Hydra override that names the urdf to load (``--play``); given, that urdf is loaded as it is.
+ASSET_PATH_OVERRIDE = "env.scene.robot.spawn.asset_path"
 # Where a run's recorded repository (owner/name of its origin remote) is fetched from.
 REPOSITORY_URL = "https://github.com/{repo}.git"
 GIT_TIMEOUT = 600
@@ -41,6 +43,10 @@ _COMMIT = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
 
 class RobotModelUnavailable(Exception):
     """The robot model a run was trained with can't be loaded; the message says why."""
+
+
+def _print(message: str) -> None:
+    print(message, flush=True)
 
 
 def cache_dir() -> str:
@@ -132,7 +138,7 @@ def _fetch(url: str, commit: str, folder: str, staging: str, objects: str | None
     shutil.rmtree(os.path.join(staging, ".git"))
 
 
-def _fetch_into(folder: str, trained: dict, objects: str | None) -> None:
+def _fetch_into(folder: str, trained: dict, objects: str | None, log) -> None:
     """Fetch the run's model into the cache folder ``folder``; the caller holds its lock."""
     repo, commit, path = trained["repo"], trained["commit"], trained["urdf_filepath"]
     # Named after the folder, so one left by a fetch that was killed is removed here; and after the host, since hosts
@@ -142,6 +148,8 @@ def _fetch_into(folder: str, trained: dict, objects: str | None) -> None:
     # The umask's mode, not tempfile.mkdtemp's 0700, so the other users of a shared cache can read it.
     os.mkdir(staging)
     try:
+        # Downloading can take a while.
+        log(f"[INFO] Fetching {repo} @ {_short(commit)} ...")
         try:
             _fetch(REPOSITORY_URL.format(repo=repo), commit, _model_folder(path), staging, objects)
         except RobotModelUnavailable as error:
@@ -157,14 +165,14 @@ def _fetch_into(folder: str, trained: dict, objects: str | None) -> None:
         shutil.rmtree(staging, ignore_errors=True)
 
 
-def materialize(trained: dict, objects: str | None = None) -> str:
+def materialize(trained: dict, objects: str | None = None, log=_print) -> str:
     """The path of the urdf a run was trained with, in a copy of its model folder at the recorded commit in cyclotron's
     cache (``robot-models/<owner>__<name>/<commit>__<model folder>/``), fetched there first when missing.
 
     ``trained`` is the run's ``robot_model`` record (``training_robot_model``). ``objects`` is a local git object
-    folder to take the commit's files from when it has them, so only what it lacks is downloaded. Raises
-    ``RobotModelUnavailable`` saying why when the record names no clean commit of a repository, the fetch fails, or
-    the urdf, fetched or cached, doesn't have the recorded sha256.
+    folder to take the commit's files from when it has them, so only what it lacks is downloaded. ``log`` prints the
+    line said before fetching. Raises ``RobotModelUnavailable`` saying why when the record names no clean commit of a
+    repository, the fetch fails, or the urdf, fetched or cached, doesn't have the recorded sha256.
     """
     _check_fetchable(trained)
     repo, commit, path = trained["repo"], trained["commit"], trained["urdf_filepath"]
@@ -178,7 +186,7 @@ def materialize(trained: dict, objects: str | None = None) -> str:
         with open(folder + ".lock", "a") as lock:
             fcntl.flock(lock, fcntl.LOCK_EX)
             if not os.path.isdir(folder):
-                _fetch_into(folder, trained, objects)
+                _fetch_into(folder, trained, objects, log)
     urdf = os.path.join(folder, path)
     try:
         _check_urdf(urdf, trained, f"{path} in the cached copy {folder}")
@@ -206,7 +214,12 @@ def _supply_hint(trained: dict) -> str:
     return f"To load it, set {MODEL_DIR_VARIABLE}=<{model}>."
 
 
-def load_training_robot_model(env_cfg, run_dir: str) -> tuple[str | None, str | None]:
+def overrides_robot_model(hydra_args: list[str]) -> bool:
+    """Whether the Hydra overrides ``hydra_args`` name the urdf to load (``env.scene.robot.spawn.asset_path``)."""
+    return any(arg.split("=", 1)[0].lstrip("+~") == ASSET_PATH_OVERRIDE for arg in hydra_args)
+
+
+def load_training_robot_model(env_cfg, run_dir: str, log=_print) -> tuple[str | None, str | None]:
     """Point ``env_cfg``'s robot at the robot model ``run_dir`` was trained with, before the environment is built, when
     the urdf it loads (``scene.robot.spawn.asset_path``) has another sha256 than the run recorded.
 
@@ -214,7 +227,9 @@ def load_training_robot_model(env_cfg, run_dir: str) -> tuple[str | None, str | 
     load, or when the run's model can't be loaded (``materialize``); check 10d then compares the two.
 
     Returns ``(loaded, unavailable)``: the line naming the robot model when the run's is loaded, else why it isn't and
-    how to supply it, for the robot model warning. Both are None when the run records no robot model.
+    how to supply it, for the robot model warning. Both are None when the run records no robot model. ``log`` prints
+    the line said before fetching, and ``unavailable`` at once when the current urdf is missing too: building the
+    environment then fails before the warning.
     """
     trained = training_robot_model(run_dir) or {}
     if not trained.get("sha256"):
@@ -223,16 +238,16 @@ def load_training_robot_model(env_cfg, run_dir: str) -> tuple[str | None, str | 
     current = getattr(spawn, "asset_path", None)
     if not isinstance(current, str):
         return None, None
-    loaded = f"Robot model: {trained.get('urdf_filepath')} @ {_short(trained.get('commit'))} (as trained)"
     if os.path.isfile(current) and _sha256(current) == trained["sha256"]:
-        return loaded, None
+        # Only the urdf's sha256 is recorded: its meshes may still differ from the run's.
+        return f"Robot model: {current} (same URDF as trained)", None
     if MODEL_DIR_VARIABLE in os.environ:
         return None, (
             f"{MODEL_DIR_VARIABLE} is set, so the robot model it names is loaded instead of the run's; unset it to load"
             " the run's."
         )
     try:
-        urdf = materialize(trained, _local_objects(current))
+        urdf = materialize(trained, _local_objects(current), log)
         # Isaac Lab converts the urdf into /tmp/IsaacLab/usd_<second>_<number from the seeded random module>, which
         # processes building their scene in the same second with the same seed share; its own folder keeps another
         # model's conversion out.
@@ -240,6 +255,9 @@ def load_training_robot_model(env_cfg, run_dir: str) -> tuple[str | None, str | 
         os.makedirs(usd_dir, exist_ok=True)
         spawn.usd_dir = tempfile.mkdtemp(prefix="usd_", dir=usd_dir)
     except (RobotModelUnavailable, OSError) as error:
-        return None, f"The robot model the run was trained with couldn't be loaded: {error}. {_supply_hint(trained)}"
+        unavailable = f"The robot model the run was trained with couldn't be loaded: {error}. {_supply_hint(trained)}"
+        if not os.path.isfile(current):
+            log(f"[WARNING] {unavailable}")
+        return None, unavailable
     spawn.asset_path = urdf
-    return loaded, None
+    return f"Robot model: {trained['urdf_filepath']} @ {_short(trained['commit'])} (as trained)", None

@@ -88,13 +88,17 @@ ranges, masses or meshes is evaluated on those. When the URDF the current code
 loads has another sha256 than `robot_model` in `code_state.yaml` records, they
 fetch the model folder the URDF sits in (`sim-model/`, with its meshes) at the
 recorded commit of the recorded repository into cyclotron's cache, and load it
-from there:
+from there (the first line only when it isn't cached yet):
 
 ```
+[INFO] Fetching menloresearch/asimov-1 @ 732cc60 ...
 [INFO] Robot model: sim-model/urdf/asimov_1.urdf @ 732cc60 (as trained)
 ```
 
-The same line names a robot model the checkout already has. The cache is
+When the checkout's URDF already has the recorded sha256, it is loaded as it
+is: `[INFO] Robot model: <the checkout's URDF> (same URDF as trained)`. Only
+the URDF is known to match then, since its sha256 is all the run records of
+the model; meshes changed without it would go unnoticed. The cache is
 `$CYCLOTRON_CACHE_DIR`, else `$XDG_CACHE_HOME/cyclotron`, else
 `~/.cache/cyclotron`; each model is in
 `robot-models/<owner>__<repo>/<commit>__<model folder>/`, readable by the
@@ -109,7 +113,9 @@ The run's model can't be loaded when the run records no commit (its URDF
 wasn't in git), when the model repository had uncommitted changes at training
 (the commit alone isn't the model), or when the fetch fails, for example
 offline. Export and play then load the current model, as before, and the
-robot model warning (check 10d) says why and how to supply the model:
+robot model warning (check 10d) says why and how to supply the model (at once,
+as a warning, when the current model's URDF is missing too, since building the
+environment then stops first):
 
 ```
 [WARNING] The robot model changed since training: sim-model/urdf/asimov_1.urdf @ 732cc60 (sha256 bcd9a911c193) -> …
@@ -119,4 +125,6 @@ robot model warning (check 10d) says why and how to supply the model:
 `ASIMOV_1_MODEL_DIR`, when set, names the robot model to load: export and play
 load it as they always have and check 10d compares it with the run's. To watch
 a run on the current robot model instead, pass `--current_robot_model` to
-`--play`; it then warns that the robot model changed, as before.
+`--play`; it then warns that the robot model changed, as before. A URDF named
+by the Hydra override `env.scene.robot.spawn.asset_path=<urdf>` is loaded as
+it is too.

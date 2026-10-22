@@ -15,7 +15,7 @@ import pytest
 
 from cyclotron import robot_model
 from cyclotron.code_state import robot_model_check, write_code_state
-from cyclotron.robot_model import cache_dir, load_training_robot_model, materialize
+from cyclotron.robot_model import cache_dir, load_training_robot_model, materialize, overrides_robot_model
 
 pytestmark = pytest.mark.skipif(shutil.which("git") is None, reason="needs git")
 
@@ -128,8 +128,10 @@ def test_a_run_trained_on_another_commit_loads_that_commit_from_the_cache(model_
     run = trained_run(model_repo.tmp, record(model_repo.old))
     assert robot_model_check(run, as_dict(cfg))[0] == "changed"
 
-    loaded, unavailable = load_training_robot_model(cfg, run)
+    lines = []
+    loaded, unavailable = load_training_robot_model(cfg, run, lines.append)
     assert loaded == f"Robot model: {URDF} @ {model_repo.old[:7]} (as trained)" and unavailable is None
+    assert lines == [f"[INFO] Fetching menloresearch/asimov-1 @ {model_repo.old[:7]} ..."]
     folder = cached(model_repo, model_repo.old)
     assert cfg.scene.robot.spawn.asset_path == str(folder / URDF)
     # Check 10d now compares the run with the model it was trained on.
@@ -151,8 +153,9 @@ def test_the_cached_copy_is_used_again_without_fetching_and_checked_each_time(mo
     urdf = cfg.scene.robot.spawn.asset_path
 
     monkeypatch.setattr(robot_model, "REPOSITORY_URL", "file:///nonexistent/{repo}.git")
-    cfg = env_cfg(model_repo.source / URDF)
-    assert load_training_robot_model(cfg, run)[1] is None and cfg.scene.robot.spawn.asset_path == urdf
+    cfg, lines = env_cfg(model_repo.source / URDF), []
+    assert load_training_robot_model(cfg, run, lines.append)[1] is None and cfg.scene.robot.spawn.asset_path == urdf
+    assert lines == []
 
     # A cached copy whose urdf was changed is refused, never fetched over.
     with open(urdf, "a") as f:
@@ -259,7 +262,8 @@ def test_a_run_on_the_current_model_loads_it_as_it_is(model_repo):
     urdf = current_model(model_repo, model_repo.old)
     cfg = env_cfg(urdf)
     loaded, unavailable = load_training_robot_model(cfg, trained_run(model_repo.tmp, record(model_repo.old)))
-    assert loaded == f"Robot model: {URDF} @ {model_repo.old[:7]} (as trained)" and unavailable is None
+    # Only the urdf is known to be the run's.
+    assert loaded == f"Robot model: {urdf} (same URDF as trained)" and unavailable is None
     assert cfg.scene.robot.spawn.asset_path == str(urdf) and cfg.scene.robot.spawn.usd_dir is None
     assert not (model_repo.tmp / "cache").exists()
 
@@ -300,14 +304,29 @@ def test_a_model_that_cant_be_loaded_leaves_the_current_one_and_says_why(model_r
     current = str(current_model(model_repo, model_repo.new))
     cfg = env_cfg(current)
     run = trained_run(model_repo.tmp, {**record(model_repo.old), **changes})
-    loaded, unavailable = load_training_robot_model(cfg, run)
-    assert loaded is None
+    lines = []
+    loaded, unavailable = load_training_robot_model(cfg, run, lines.append)
+    assert loaded is None and not [line for line in lines if line.startswith("[WARNING]")]
     assert unavailable.startswith(f"The robot model the run was trained with couldn't be loaded: {reason}")
     assert unavailable.endswith(">.") and ". To load it, set ASIMOV_1_MODEL_DIR=<the " in unavailable
     assert cfg.scene.robot.spawn.asset_path == current and cfg.scene.robot.spawn.usd_dir is None
     # Nothing half-fetched is left to be found later.
     models = model_repo.tmp / "cache" / "robot-models"
     assert [path for path in models.glob("*/*") if path.is_dir()] == []
+
+
+def test_why_it_cant_be_loaded_is_said_at_once_when_the_current_model_is_missing_too(model_repo):
+    # Building the environment would stop first, saying only that the current urdf doesn't exist.
+    cfg, lines = env_cfg(model_repo.tmp / "missing" / URDF), []
+    run = trained_run(model_repo.tmp, {**record(model_repo.old), "commit": "0" * 40})
+    loaded, unavailable = load_training_robot_model(cfg, run, lines.append)
+    assert lines == ["[INFO] Fetching menloresearch/asimov-1 @ 0000000 ...", f"[WARNING] {unavailable}"]
+
+
+def test_a_urdf_named_by_a_hydra_override_is_loaded_as_it_is():
+    assert overrides_robot_model(["env.scene.num_envs=4", "env.scene.robot.spawn.asset_path=/models/a.urdf"])
+    assert overrides_robot_model(["++env.scene.robot.spawn.asset_path=/models/a.urdf"])
+    assert not overrides_robot_model(["env.scene.robot.spawn.usd_dir=/tmp/usd", "agent.seed=1", "--headless"])
 
 
 def test_the_hint_names_the_commit_to_check_out_only_when_it_is_the_model():

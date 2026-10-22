@@ -305,7 +305,8 @@ flowchart TD
       (`robot_model` in `code_state.yaml`). Before building the environment,
       export loads that model, fetching it into cyclotron's cache when the
       checkout's URDF differs, and says so: `Robot model:
-      sim-model/urdf/asimov_1.urdf @ 732cc60 (as trained)` (see
+      sim-model/urdf/asimov_1.urdf @ 732cc60 (as trained)`, or `… (same URDF
+      as trained)` when the checkout's URDF is already the run's (see
       [The robot model](code-changes-since-training.md#the-robot-model)).
       Export then hashes the URDF the environment loaded and warns when it
       differs, naming both files and their commits: `The robot model changed

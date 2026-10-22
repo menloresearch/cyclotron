@@ -104,7 +104,7 @@ import cyclotron.tasks  # noqa: F401
 from cyclotron.code_state import check_out_hint, describe_changes
 from cyclotron.policy_io import resolve_policy_io
 from cyclotron.policy_loading import load_policy
-from cyclotron.robot_model import load_training_robot_model
+from cyclotron.robot_model import load_training_robot_model, overrides_robot_model
 
 CODE_CHANGE_CONSEQUENCE = (
     "--play runs the checkpoint in an environment built from the current code, so it may behave differently than in"
@@ -140,7 +140,8 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
 
     env_cfg.log_dir = log_dir
     robot_note = None
-    if not args_cli.current_robot_model:
+    # Like --current_robot_model, a urdf named by a Hydra override is loaded as it is.
+    if not args_cli.current_robot_model and not overrides_robot_model(hydra_args):
         robot_loaded, robot_note = load_training_robot_model(env_cfg, log_dir)
         if robot_loaded:
             print(f"[INFO] {robot_loaded}")

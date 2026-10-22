@@ -45,11 +45,15 @@ Four things to know before loading anything else:
 - **The robot model is the run's.** Play simulates the robot model the run
   was trained with, fetched into cyclotron's cache by the commit its
   `code_state.yaml` records when your checkout's differs, and prints
-  `Robot model: sim-model/urdf/asimov_1.urdf @ <commit> (as trained)`; see
+  `Robot model: sim-model/urdf/asimov_1.urdf @ <commit> (as trained)`
+  (`Robot model: <the checkout's URDF> (same URDF as trained)` when your
+  checkout's URDF is the run's); see
   [The robot model](code-changes-since-training.md#the-robot-model). When it
   can't be loaded, the current one is, and the robot model warning says why.
-  `--current_robot_model` simulates the current one instead, and a set
-  `ASIMOV_1_MODEL_DIR` the one it names; both warn when it isn't the run's.
+  `--current_robot_model` simulates the current one instead, a set
+  `ASIMOV_1_MODEL_DIR` the one it names, and a Hydra override
+  `env.scene.robot.spawn.asset_path=<urdf>` that URDF, left as given; all
+  three warn when it isn't the run's.
 
 ## Configuration
 
@@ -87,7 +91,8 @@ remaining RSL-RL flags (`--run_name`, `--resume`, `--logger`,
 Unknown flags are passed to Hydra as config overrides, so a trained value a
 code-change warning names (for example
 `env.observations.policy.base_ang_vel.scale=0.25`) can be passed back on the
-command line.
+command line. An override of `env.scene.robot.spawn.asset_path` is simulated
+as given, instead of the run's robot model, like `--current_robot_model`.
 
 ## Advanced examples
 
