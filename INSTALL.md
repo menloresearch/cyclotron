@@ -165,7 +165,8 @@ python -m pip install -r requirements-eval.txt
 ```
 
 Skip the separate environment if using the full training installation.
-`PYTHON_EXE=/path/to/python` selects another interpreter. The entry scripts
+`cyclotron.sh` runs `python` (an active environment's), or `python3` where
+there is no `python`; `PYTHON_EXE=/path/to/python` selects another interpreter. The entry scripts
 also work directly: `python scripts/view.py ...` and
 `python scripts/benchmark.py ...`; no editable package install is necessary.
 

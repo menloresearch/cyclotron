@@ -3,7 +3,15 @@
 set -euo pipefail
 
 CYCLOTRON_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
-PYTHON_EXE="${PYTHON_EXE:-python}"
+# An explicit PYTHON_EXE wins, then `python` (an active venv's or conda env's), then python3,
+# which is all that many systems install.
+if [ -z "${PYTHON_EXE:-}" ]; then
+    if command -v python >/dev/null 2>&1; then
+        PYTHON_EXE=python
+    else
+        PYTHON_EXE=python3
+    fi
+fi
 
 usage() {
     echo "Usage: $0 {--install|--list|--train|--play|--export|--share|--view|--benchmark} [arguments]"
