@@ -111,11 +111,15 @@ repository identities still work. Conflicting
 selections and unknown harnesses are rejected. Dataset URLs never install plugins.
 Saved results use their recorded harness.
 
-Unknown options are passed to the harness for validation, including after `--`.
-Put positional inputs before `--`; cyclotron must resolve all inputs. Reserved
-`policy=`, `benchmark=` and `out=` aliases are intercepted even after the
-separator, and conflicting duplicate options are errors. HPV will reject
-options it does not recognize. See its
+Other `key=value` words (a lowercase key, as HPV writes its options) are passed
+to the harness for validation, including after `--`; any other unknown word,
+such as `--seed`, `org/m@main=x` or a Hub URL containing `=`, is an error, so
+no input reaches the harness unresolved. Put positional inputs before `--`;
+cyclotron must resolve all inputs, and an input whose name contains `=` is
+given as `policy=<input>` or `benchmark=<input>`. Reserved `policy=`,
+`benchmark=` and `out=` aliases are intercepted even after the separator, and
+conflicting duplicate options are errors. HPV will reject options it does not
+recognize. See its
 [benchmark documentation](https://github.com/menloresearch/humanoid-policy-viewer/blob/main/docs/benchmarking.md)
 for simulation details.
 
@@ -338,7 +342,10 @@ checked against pinned Git/LFS metadata and materialized as real files for the
 viewer, filenames containing `[`, `*` or `?` included. Writable workspaces are separate;
 opening the same Hub reference preserves edits rather than overwriting them.
 Private repositories use `hf auth login` or `HF_TOKEN`; `HF_ENDPOINT` selects
-the Hub. Local run/view paths do not need Hub authentication. HPV's own files
+the Hub. Local run/view paths do not need Hub authentication. HPV itself runs
+without Hub credentials or access: cyclotron removes `HF_TOKEN`, points
+`HF_TOKEN_PATH` at a file that does not exist and `HF_ENDPOINT` at an
+unroutable local address for it. HPV's own files
 (its download cache, temporary policy libraries and the viewer's debug logs)
 go under `harnesses/humanoid-policy-viewer/` in the cyclotron cache, so the
 HPV checkout stays clean.

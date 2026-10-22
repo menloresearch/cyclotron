@@ -1,12 +1,17 @@
 """Thin script CLI: common flags translated, harness words passed through."""
 
 import argparse
+import re
 import sys
 from pathlib import Path
 
 
 VALUE_OPTIONS = ("harness", "revision", "benchmark", "policy", "out", "port", "tests", "repeats", "jobs", "robots", "shard")
 FLAG_OPTIONS = ("no-open", "force", "watch", "verbose")
+RUN_ONLY = ("out", "tests", "repeats", "jobs", "robots", "shard", "force", "watch", "verbose")
+# What reaches the harness unresolved: its key=value words. Any other word (org/m@main=x, a Hub
+# URL with "=" in it) could be an input the harness would fetch from the Hub itself.
+HARNESS_WORD = re.compile(r"[a-z][a-z0-9-]*=")
 
 
 def parse_run(argv, viewing=False):
@@ -44,6 +49,11 @@ def parse_run(argv, viewing=False):
             normalized.append(word)
     args, unknown = parser.parse_known_intermixed_args(normalized)
     passthrough += unknown
+    for word in passthrough:
+        if not HARNESS_WORD.match(word) and word not in FLAG_OPTIONS:
+            raise ValueError(f"Unknown option {word!r}: harness options pass through only as key=value words with a "
+                             "lowercase key (for example robots=3); give an input whose name contains '=' as "
+                             "policy=<input> or benchmark=<input>")
     for name in VALUE_OPTIONS:
         values = getattr(args, name)
         if name != "policy":
@@ -65,8 +75,9 @@ def parse_run(argv, viewing=False):
     policies.extend(args.policy or [])
     if not policies:
         parser.error(f"Give at least one policy to {'view' if viewing else 'benchmark'}")
-    if viewing and (args.out or any(getattr(args, name) for name in ("tests", "repeats", "jobs", "robots", "shard", "force", "watch"))):
-        raise ValueError("Run options belong to --benchmark, not --view")
+    given = [name for name in RUN_ONLY if getattr(args, name)]
+    if viewing and given:
+        raise ValueError(f"Run options belong to --benchmark, not --view: {', '.join('--' + name for name in given)}")
     options = [f"{name}={getattr(args, name)}" for name in ("port", "tests", "repeats", "jobs", "robots", "shard") if getattr(args, name)]
     options += [name for name in FLAG_OPTIONS if getattr(args, name.replace("-", "_"))]
     options += passthrough

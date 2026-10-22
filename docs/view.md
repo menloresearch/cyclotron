@@ -80,8 +80,12 @@ Options after the policies:
 | `--benchmark <folder or datasets/org/name[@rev]>` | Open this benchmark in HPV's existing editor (default: cyclotron's `benchmarks/default`). A local folder is edited in place; a Hub dataset gets a separate writable copy. |
 | `--harness <name>` | Select a registered harness (currently `humanoid-policy-viewer`); also configurable through `CYCLOTRON_HARNESS`. |
 
+Run options such as `--jobs`, `--out`, `--watch` or `--verbose` belong to
+[`--benchmark`](benchmark.md#options-and-harness-selection); `--view` refuses them.
+
 Private or gated Hub repos need `hf auth login` or `HF_TOKEN` set. Cyclotron's
-Python SDK handles authentication, not HPV. `HF_ENDPOINT` selects another Hub.
+Python SDK handles authentication, not HPV, which runs with no Hub token or Hub
+access. `HF_ENDPOINT` selects another Hub.
 
 Downloads live under `~/.cache/cyclotron/` (or `$XDG_CACHE_HOME/cyclotron`),
 overridden by `CYCLOTRON_CACHE_DIR`. Inputs are separated by endpoint, repo

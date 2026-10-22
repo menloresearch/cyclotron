@@ -107,9 +107,11 @@ class HPV:
                    HPV_POLICY_ROOTS="policies", HPV_BENCHMARK_RESULTS_DIR=str(self.results),
                    HPV_BENCHMARKS_DIR=str(self.workspaces), HPV_BENCHMARK_TEMPLATE=str(self.root / DEFAULT_BENCHMARK),
                    HPV_LOG_DIR=str(owned / "logs"), TMPDIR=str(temporary))
-        # No harness operation should ever need Hub credentials.
+        # No harness operation should ever need Hub credentials or the Hub: HPV gets local paths
+        # only, and should a Hub ID still reach it, it finds no saved token and no Hub to ask.
         env.pop("HF_TOKEN", None)
         env.pop("HUGGING_FACE_HUB_TOKEN", None)
+        env.update(HF_TOKEN_PATH=str(owned / "no-hf-token"), HF_ENDPOINT="http://127.0.0.1:9")
         return env
 
     def execute(self, args, capture=False):

@@ -70,8 +70,21 @@ def test_cli_translation_and_input_aliases(tmp_path):
 def test_view_known_options():
     _, policies, _, words = parse_run(["org/first", "--port", "4321", "--no-open"], viewing=True)
     assert policies == ["org/first"] and words == ["port=4321", "no-open"]
-    with pytest.raises(ValueError, match="Run options"):
-        parse_run(["org/first", "jobs=2"], viewing=True)
+    for option in (["jobs=2"], ["--verbose"], ["verbose"], ["--watch"], ["--out", "x"]):
+        with pytest.raises(ValueError, match="Run options belong to --benchmark"):
+            parse_run(["org/first", *option], viewing=True)
+
+
+@pytest.mark.parametrize("word", ["org/m@main=x", "https://huggingface.co/org/m/tree/v=1", "--future=one", "--future",
+                                  "Robots=3", "datasets/org/suite@v=1"])
+def test_only_harness_words_pass_through(word):
+    # HPV would take any of these for a Hub input and fetch it itself.
+    for argv in (["org/first", word], ["org/first", "--", word]):
+        with pytest.raises(ValueError, match="key=value words"):
+            parse_run(argv)
+    # Inputs whose names contain "=" are given through their aliases, and cyclotron resolves them.
+    _, policies, benchmark, words = parse_run(["policy=org/m@main=x", "benchmark=datasets/org/suite@v=1", "future-key=a/b"])
+    assert policies == ["org/m@main=x"] and benchmark == "datasets/org/suite@v=1" and words == ["future-key=a/b"]
 
 
 def test_view_takes_several_policies_and_folders(tmp_path):
@@ -397,6 +410,8 @@ def test_child_args_are_local_and_headless(monkeypatch, tmp_path):
     execute = Mock()
     monkeypatch.setattr(harness, "execute", execute)
     monkeypatch.setenv("SSH_CONNECTION", "test")
+    monkeypatch.setenv("HF_TOKEN", "hf_secret")
+    monkeypatch.setenv("HF_ENDPOINT", "https://huggingface.co")
     harness.view([str(tmp_path / "a"), str(tmp_path / "b")], str(tmp_path / "suite"), [])
     assert execute.call_args.args[0] == ["scripts/hf.mjs", f"policy={tmp_path / 'a'}", f"policy={tmp_path / 'b'}",
                                          f"benchmark={tmp_path / 'suite'}", "no-open"]
@@ -408,6 +423,9 @@ def test_child_args_are_local_and_headless(monkeypatch, tmp_path):
     assert env["HPV_BENCHMARK_TEMPLATE"] == str(ROOT / "benchmarks/default")
     assert env["HPV_LOG_DIR"] == str(tmp_path / "cache/harnesses" / HPV.name / "logs")
     assert "HF_TOKEN" not in env
+    # Should a Hub ID reach HPV anyway, it finds no saved token and no Hub.
+    assert env["HF_TOKEN_PATH"].startswith(str(tmp_path / "cache")) and not Path(env["HF_TOKEN_PATH"]).exists()
+    assert env["HF_ENDPOINT"] == "http://127.0.0.1:9"
 
 
 @pytest.fixture
