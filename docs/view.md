@@ -33,7 +33,7 @@ and [Node.js](https://nodejs.org) 20 or newer with npm. No training environment
 is needed; see [standalone installation](../INSTALL.md#viewing-and-benchmarking-only-optional).
 The first run fetches the `third_party/humanoid-policy-viewer` submodule, its
 npm dependencies and the Asimov 1 robot model; after a pull that moves the
-submodule, the next run updates it and its dependencies (unless it has
+submodule, the next run updates it, its robot model and its dependencies (unless it has
 uncommitted changes, which are left alone with a warning). The viewer then checks the policy,
 starts a local server and opens the browser with the policy selected (over SSH
 or without a display it prints a link instead; see

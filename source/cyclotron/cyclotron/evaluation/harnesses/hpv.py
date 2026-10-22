@@ -77,6 +77,9 @@ class HPV:
                 print(f"Warning: {submodule} has local changes; leaving its checkout untouched", file=sys.stderr)
             else:
                 subprocess.run(["git", "-C", str(self.root), "submodule", "update", "--checkout", "--depth", "1", submodule], check=True)
+                # HPV's robot model is its own submodule, which the update above leaves where it was
+                # (HPV's setup only checks that it exists): HPV's script moves it to HPV's new pin.
+                subprocess.run(["bash", "scripts/init-asimov-1.sh"], cwd=self.path, check=True)
                 refresh = True
         if refresh or not (self.path / "node_modules/vite/package.json").is_file():
             subprocess.run(["npm", "ci"], cwd=self.path, check=True)

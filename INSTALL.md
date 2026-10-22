@@ -182,7 +182,8 @@ If Chromium reports missing Linux system libraries, follow Playwright's
 installation guidance; cyclotron does not run privileged OS installers.
 
 When cyclotron's submodule pin changes, the next use updates a clean HPV
-checkout and refreshes its npm dependencies. Local changes are left alone
-with a warning. Inspection for publication needs npm dependencies, but not
+checkout, moves its Asimov 1 robot model to the commit that HPV pins (with
+HPV's `scripts/init-asimov-1.sh`) and refreshes its npm dependencies. Local
+changes are left alone with a warning. Inspection for publication needs npm dependencies, but not
 robot assets or Chromium. See [viewing](docs/view.md) and
 [benchmarking/publication](docs/benchmark.md) for storage and commands.

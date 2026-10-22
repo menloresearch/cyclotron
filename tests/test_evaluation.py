@@ -428,6 +428,24 @@ def test_child_args_are_local_and_headless(monkeypatch, tmp_path):
     assert env["HF_ENDPOINT"] == "http://127.0.0.1:9"
 
 
+@pytest.mark.parametrize("moved", [True, False])
+def test_moving_the_harness_pin_also_moves_its_robot_model(monkeypatch, moved):
+    from cyclotron.evaluation.harnesses import hpv
+
+    harness = HPV(ROOT)
+    monkeypatch.setattr(harness, "pin", lambda: SHA)
+    monkeypatch.setattr(harness, "checkout", lambda: {"commit": "b" * 40 if moved else SHA, "dirty": False})
+    monkeypatch.setattr(hpv.subprocess, "check_output", lambda *a, **kw: "22.0.0")
+    calls = []
+    monkeypatch.setattr(hpv.subprocess, "run", lambda command, **kw: calls.append((command, kw.get("cwd"))))
+    harness.prepare()
+    update = ["git", "-C", str(ROOT), "submodule", "update", "--checkout", "--depth", "1", "third_party/" + HPV.name]
+    if moved:
+        assert calls == [(update, None), (["bash", "scripts/init-asimov-1.sh"], harness.path), (["npm", "ci"], harness.path)]
+    else:
+        assert all(command[:2] != ["bash", "scripts/init-asimov-1.sh"] and command != update for command, _ in calls)
+
+
 @pytest.fixture
 def run_tree(tmp_path):
     """logs/rsl_rl-like runs: exported and not, nested experiments, and files that are no run."""
