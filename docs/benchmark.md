@@ -62,8 +62,8 @@ folder, so a save in HPV's UI changes tracked files. Review them with
 checkout blocks `submit` and `publish`. Bump `version` in `benchmark.yaml` when
 a change can move a score. Like any local folder, its results are local-only.
 
-HPV's **New benchmark** button starts new suites as a copy of this folder
-(cyclotron sets HPV's `HPV_BENCHMARK_TEMPLATE` to it). `tests/test_evaluation.py`
+It is only an example: HPV's **New benchmark** button does not copy it (see
+[editing a benchmark](view.md#edit-a-benchmark-in-hpv)). `tests/test_evaluation.py`
 validates this folder against the pinned HPV, so an upgrade that changes the
 format or protocol fails there.
 
@@ -194,7 +194,7 @@ Author the benchmark in HPV's existing UI:
 ```
 
 HPV edits and saves that exact folder. New benchmarks created in its UI are
-saved in `benchmarks/<name>/` and start as a copy of `benchmarks/default/`; to
+saved in `benchmarks/<name>/` and start at `version: 1` under the pinned HPV's protocol; to
 change a published benchmark, `--benchmark pull` it into `benchmarks/` first.
 See [editing a benchmark](view.md#edit-a-benchmark-in-hpv). Cyclotron does not
 reimplement test creation, task configuration or visualization.

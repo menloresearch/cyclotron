@@ -482,6 +482,7 @@ def test_child_args_are_local_and_headless(monkeypatch, tmp_path):
     harness = HPV(ROOT)
     execute = Mock()
     monkeypatch.setattr(harness, "execute", execute)
+    monkeypatch.setattr(harness, "write_template", lambda: tmp_path / "template")
     monkeypatch.setenv("SSH_CONNECTION", "test")
     monkeypatch.setenv("HF_TOKEN", "hf_secret")
     monkeypatch.setenv("HF_ENDPOINT", "https://huggingface.co")
@@ -491,10 +492,10 @@ def test_child_args_are_local_and_headless(monkeypatch, tmp_path):
     harness.run([str(tmp_path / "policy")], str(tmp_path / "suite"), tmp_path / "out", ["jobs=2"])
     assert f"out={tmp_path / 'out'}" in execute.call_args.args[0]
     env = harness.env()
-    # New benchmarks start from cyclotron's default suite and are saved beside it; HPV's debug logs stay
-    # out of its checkout.
+    # New benchmarks start from the template view() writes and are saved beside the default suite; HPV's
+    # debug logs stay out of its checkout.
     assert env["HPV_BENCHMARKS_DIR"] == str(ROOT / "benchmarks")
-    assert env["HPV_BENCHMARK_TEMPLATE"] == str(ROOT / "benchmarks/default")
+    assert env["HPV_BENCHMARK_TEMPLATE"] == str(tmp_path / "template")
     assert env["HPV_LOG_DIR"] == str(tmp_path / "cache/harnesses" / HPV.name / "logs")
     assert "HF_TOKEN" not in env
     # Should a Hub ID reach HPV anyway, it finds no saved token and no Hub.
@@ -570,6 +571,7 @@ def test_view_passes_every_policy_in_one_call(monkeypatch, run_tree):
     monkeypatch.setattr(runner, "resolve_input", lambda word, kind, select, revision: {"path": f"/cache/{word}@{revision}"})
     execute = Mock()
     monkeypatch.setattr(HPV, "execute", lambda self, args: execute(args))
+    monkeypatch.setattr(HPV, "write_template", lambda self: None)
     monkeypatch.setenv("SSH_CONNECTION", "test")
     policy = exported[1] / "exported"
     runner.view(ROOT, [str(policy), "org/first", str(root), "org/second"], revision="v1", options=["port=3131"])
@@ -592,6 +594,50 @@ def test_default_benchmark_is_cyclotrons_own_and_opens_in_place(monkeypatch, tmp
     opened.assert_called_once_with([str(tmp_path / "policy")], str(ROOT / "benchmarks/default"), None)
 
 
+
+def test_new_benchmarks_start_from_the_pinned_hpvs_own_code(monkeypatch, tmp_path):
+    monkeypatch.setenv("CYCLOTRON_CACHE_DIR", str(tmp_path / "cache"))
+    harness = HPV(ROOT)
+    context = {"protocol": 3, "robots": ["asimov-1"], "interfaces": ["velocity-command"],
+               "metrics": ["survival_rate@3", "survival_time@4"]}
+    monkeypatch.setattr(harness, "execute", lambda args, capture=False: context)
+    folder = harness.write_template()
+    raw = yaml.safe_load((folder / "benchmark.yaml").read_text())
+    assert raw["version"] == 1
+    assert raw["harness"] == {"repo": HPV.repo, "protocol": 3, "tested_commit": None}
+    assert raw["requires"] == {"robot": {"name": "asimov-1"}, "policy_interface": "velocity-command"}
+    assert [task["metric"] for task in raw["tasks"]] == ["survival_rate@3", "survival_time@4"]
+    assert (folder / "README.md").read_text().startswith("# new-benchmark\n\nDescribe what this benchmark measures.\n")
+    # Named by its contents: the same pin reuses it, another pin gets its own.
+    assert harness.write_template() == folder
+    context["protocol"] = 4
+    assert harness.write_template() != folder
+    context["robots"] = ["asimov-1", "asimov-2"]
+    with pytest.raises(ValueError, match="needs choosing"):
+        harness.write_template()
+
+
+@pytest.mark.skipif(not shutil.which("node") or not (ROOT / "third_party/humanoid-policy-viewer/node_modules/yaml").is_dir(),
+                    reason="needs node and the harness's npm dependencies")
+def test_the_viewers_new_benchmark_is_version_1_under_the_pinned_hpv(monkeypatch, tmp_path):
+    monkeypatch.setenv("CYCLOTRON_CACHE_DIR", str(tmp_path / "cache"))
+    monkeypatch.setattr(HPV, "prepare", lambda self: None)
+    harness = HPV(ROOT)
+    template = harness.write_template()
+    # What the viewer's New benchmark makes from it (HPV's initBenchmark, without example tests).
+    made = tmp_path / "my-bench"
+    script = ("const { initBenchmark } = await import('./scripts/benchmarkInit.mjs');"
+              "initBenchmark(process.argv[1], { title: 'My bench', exampleTest: false, template: process.argv[2], log: () => {} });")
+    subprocess.run(["node", "--input-type=module", "-e", script, str(made), str(template)], cwd=harness.path, check=True)
+    raw = yaml.safe_load((made / "benchmark.yaml").read_text())
+    written = yaml.safe_load((template / "benchmark.yaml").read_text())
+    assert (raw["name"], raw["title"], raw["version"]) == ("my-bench", "My bench", 1)
+    assert raw["harness"]["tested_commit"] == harness.checkout()["commit"]
+    assert {key: raw[key] for key in ("requires", "defaults", "tests", "tasks")} == {
+        key: written[key] for key in ("requires", "defaults", "tests", "tasks")}
+    assert (made / "README.md").read_text().startswith("# My bench\n\nDescribe what this benchmark measures.\n")
+
+
 def test_a_hub_benchmark_opens_read_only_from_the_cache(monkeypatch, tmp_path, capsys):
     monkeypatch.setattr(HPV, "prepare", lambda self: None)
     cached = tmp_path / "cache/org__suite"
@@ -601,6 +647,7 @@ def test_a_hub_benchmark_opens_read_only_from_the_cache(monkeypatch, tmp_path, c
     monkeypatch.setattr(runner, "resolve_input", lambda word, kind, select: item)
     execute = Mock()
     monkeypatch.setattr(HPV, "execute", lambda self, args: execute(args))
+    monkeypatch.setattr(HPV, "write_template", lambda self: None)
     monkeypatch.setenv("SSH_CONNECTION", "test")
     policy = tmp_path / "policy.onnx"
     policy.write_bytes(b"onnx")

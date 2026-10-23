@@ -1,5 +1,6 @@
 """HPV runs local inputs; all Hugging Face operations belong to Python."""
 
+import hashlib
 import json
 import os
 import re
@@ -7,12 +8,28 @@ import shlex
 import signal
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 from ..hub import cache_root
 from ..provenance import file_manifest, git_state, write_json
 
 INSPECTION_SCHEMAS = {"benchmark": "hpv-inspection/1", "policy": "hpv-policy-inspection/1"}
+# What the pinned HPV's own code says a new benchmark runs under (see HPV.write_template).
+CONTEXT_SCRIPT = (
+    "const protocol = await import('./src/benchmark/protocol.js');"
+    "const summary = await import('./src/benchmark/summary.js');"
+    "console.log(JSON.stringify({ protocol: protocol.BENCHMARK_PROTOCOL, robots: protocol.ROBOTS,"
+    " interfaces: protocol.POLICY_INTERFACES,"
+    " metrics: ['survival_rate', 'survival_time'].map((name) => summary.latestMetricVersion(name)) }));"
+)
+TEMPLATE_README = """# new-benchmark
+
+Describe what this benchmark measures.
+
+Each row of `data/<category>/test.jsonl` is one test, and `benchmark.yaml` says how the tests run and are scored.
+To run, edit and publish it, see [cyclotron's benchmark docs](https://github.com/menloresearch/cyclotron/blob/main/docs/benchmark.md).
+"""
 
 
 class HPV:
@@ -30,6 +47,7 @@ class HPV:
         # Where the viewer's "New benchmark" and --benchmark pull put benchmarks: beside the default,
         # ignored by git unless benchmarks/.gitignore lets one in.
         self.benchmarks = self.root / "benchmarks"
+        self.template = None
         self._prepared = False
 
     @staticmethod
@@ -100,18 +118,17 @@ class HPV:
         return None
 
     def env(self):
-        from ..runner import DEFAULT_BENCHMARK
-
         env = os.environ.copy()
         owned = cache_root() / "harnesses" / self.name
         temporary = owned / "tmp"
         temporary.mkdir(parents=True, exist_ok=True)
-        # HPV's "New benchmark" starts from cyclotron's own default suite and saves beside it;
+        # HPV's "New benchmark" copies the template view() writes and saves beside the default suite;
         # HPV's caches and logs stay out of the checkout.
         env.update(HPV_CACHE_DIR=str(owned), HPV_POLICY_LIBRARY_DIR=str(owned / "policies"),
                    HPV_POLICY_ROOTS="policies", HPV_BENCHMARK_RESULTS_DIR=str(self.results),
-                   HPV_BENCHMARKS_DIR=str(self.benchmarks), HPV_BENCHMARK_TEMPLATE=str(self.root / DEFAULT_BENCHMARK),
-                   HPV_LOG_DIR=str(owned / "logs"), TMPDIR=str(temporary))
+                   HPV_BENCHMARKS_DIR=str(self.benchmarks), HPV_LOG_DIR=str(owned / "logs"), TMPDIR=str(temporary))
+        if self.template:
+            env["HPV_BENCHMARK_TEMPLATE"] = str(self.template)
         # No harness operation should ever need Hub credentials or the Hub: HPV gets local paths
         # only, and should a Hub ID still reach it, it finds no saved token and no Hub to ask.
         env.pop("HF_TOKEN", None)
@@ -159,7 +176,59 @@ class HPV:
                 words.append("no-open")
         return words
 
+    def write_template(self):
+        """Writes the folder the viewer's New benchmark copies, from the pinned HPV's own code, and returns it:
+        version 1 under the protocol, robot, policy interface and newest metrics that will run it. Its run
+        settings are only a starting point, changed in the viewer; HPV fills in the name and tested commit."""
+        context = self.execute(["--input-type=module", "-e", CONTEXT_SCRIPT], capture=True)
+        if len(context["robots"]) != 1 or len(context["interfaces"]) != 1:
+            raise ValueError(f"{self.name} supports robots {context['robots']} and policy interfaces "
+                             f"{context['interfaces']}; a new benchmark's requires: needs choosing")
+        rate, time = context["metrics"]
+        files = {"README.md": TEMPLATE_README, "benchmark.yaml": f"""\
+# What runs and how it is scored. Tests live in data/<category>/test.jsonl, one per line.
+# Reference: humanoid-policy-viewer docs/benchmarks.md
+name: new-benchmark
+title: new-benchmark
+description: Describe what this benchmark measures.
+version: 1                      # this benchmark's own version: bump whenever a change can move a score
+harness:
+  repo: {self.repo}
+  protocol: {context['protocol']}                   # the harness's scoring rules this benchmark is checked with
+  tested_commit: null
+requires:
+  robot: {{ name: {context['robots'][0]} }}
+  policy_interface: {context['interfaces'][0]}
+defaults:
+  repeats: 5                    # each repeat draws its own seeded randomisation
+  seed: 0
+  randomize: {{ action_delay: env_range, initial_joint_noise_rad: 0.02 }}
+  timeout_s: 600
+tests:                          # {{ all: true }}, {{ config: <category> }} or {{ id: <category>/<name> }}
+  - {{ all: true }}
+tasks:                          # leaderboard numbers; _v<version> is appended to each id
+  - {{ id: survival_rate, metric: {rate} }}
+  - {{ id: survival_time, metric: {time} }}
+"""}
+        # Named by its contents: checkouts pinning different HPV commits share the cache, not a template.
+        key = hashlib.sha256(json.dumps(files, sort_keys=True).encode()).hexdigest()[:12]
+        folder = cache_root() / "harnesses" / self.name / "new-benchmark" / key
+        if not folder.is_dir():
+            folder.parent.mkdir(parents=True, exist_ok=True)
+            with tempfile.TemporaryDirectory(prefix=".new-benchmark-", dir=folder.parent) as temporary:
+                staged = Path(temporary) / "files"
+                staged.mkdir()
+                for name, text in files.items():
+                    (staged / name).write_text(text)
+                try:
+                    staged.rename(folder)
+                except OSError:
+                    if not folder.is_dir():
+                        raise
+        return folder
+
     def view(self, policies, benchmark, options, hub=None):
+        self.template = self.write_template()
         if hub:
             # HPV's viewer refuses edits to a folder holding its Hub download record, so the pinned
             # cache stays as published; cyclotron's cache checks skip dotfiles.
