@@ -72,13 +72,13 @@ flowchart LR
     Outside["External IsaacLab Experiment"] -->|checkpoint| Export
     style Outside fill:transparent,stroke:transparent
     Export -->|exported/ folder| View
-    Export --> Share
+    Export -->|"--share upload"| Share
     Share -->|Hugging Face repo| View
-    Export --> Benchmark
-    Share --> Benchmark
+    Export -->|local exported/ folder| Benchmark
+    Share -->|Hugging Face repo| Benchmark
     Benchmark -->|pinned Hub inputs| Submit[Submit scores]
     View -->|edit benchmark folder| Publish[Publish benchmark]
-    Publish --> Benchmark
+    Publish -->|Hub dataset| Benchmark
 ```
 
 <a id="train"></a>
