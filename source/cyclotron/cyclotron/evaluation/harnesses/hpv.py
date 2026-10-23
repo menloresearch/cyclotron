@@ -27,7 +27,8 @@ class HPV:
         self.root = Path(root).resolve()
         self.path = self.root / "third_party" / self.name
         self.results = self.root / "logs" / "benchmark_results"
-        # Where the viewer's "New benchmark" and --benchmark pull put benchmarks: beside the default, to commit.
+        # Where the viewer's "New benchmark" and --benchmark pull put benchmarks: beside the default,
+        # ignored by git unless benchmarks/.gitignore lets one in.
         self.benchmarks = self.root / "benchmarks"
         self._prepared = False
 

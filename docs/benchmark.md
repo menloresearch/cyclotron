@@ -199,8 +199,9 @@ change a published benchmark, `--benchmark pull` it into `benchmarks/` first.
 See [editing a benchmark](view.md#edit-a-benchmark-in-hpv). Cyclotron does not
 reimplement test creation, task configuration or visualization.
 
-Benchmarks in `benchmarks/` are meant to be committed. Until one is, its
-untracked folder makes the checkout dirty, so commit it before publishing.
+Git ignores the benchmarks in `benchmarks/` (see `benchmarks/.gitignore`), so
+an unpublished one never makes the checkout dirty. To commit one on purpose,
+add a `!/<name>/` line for it to that file; its files then track like any other.
 
 After saving, publish the folder with cyclotron:
 
@@ -212,7 +213,7 @@ After saving, publish the folder with cyclotron:
 # Existing dataset: optimistic base check and optional PR
 ./cyclotron.sh --benchmark publish ./my-benchmark <org>/<dataset> --base <commit> --pr
 
-# A published benchmark: pull it, edit and commit it, then publish onto the commit it was pulled from
+# A published benchmark: pull it, edit it, then publish onto the commit it was pulled from
 ./cyclotron.sh --benchmark pull datasets/<org>/<dataset>
 ./cyclotron.sh --benchmark publish benchmarks/<dataset> <org>/<dataset>
 

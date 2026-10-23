@@ -105,8 +105,8 @@ A test's Environment tab also sets where the robot starts and whether it drops
 and settles first (see [start poses](benchmark.md#start-poses-and-their-hub-form)).
 To start a new benchmark, use the viewer's **New benchmark** UI. New folders
 are saved in `benchmarks/<name>/`, beside cyclotron's `benchmarks/default/`,
-which they start as a copy of. Commit them: until then the untracked folder
-makes the checkout dirty, which blocks publishing and makes runs unsubmittable.
+which they start as a copy of. Git ignores them (`benchmarks/.gitignore`), so
+they never make the checkout dirty; to commit one, add a `!/<name>/` line there.
 
 Without `--benchmark`, the viewer opens cyclotron's default suite,
 `benchmarks/default/`, in place: saving in the UI changes tracked files in this

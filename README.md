@@ -253,8 +253,9 @@ local folders remain local-only; submission requires pinned Hub model and
 benchmark inputs, clean code and a complete unmodified suite.
 
 Benchmarks live in `benchmarks/`: the viewer's **New benchmark** saves there,
-and `--benchmark pull` copies a published one there to edit. Edit them in
-HPV's existing UI, commit them, then publish:
+and `--benchmark pull` copies a published one there to edit. Git ignores them
+until you add one to `benchmarks/.gitignore`. Edit them in HPV's existing UI,
+then publish:
 
 ```bash
 ./cyclotron.sh --benchmark pull datasets/<org>/<dataset>    # or start one with New benchmark
