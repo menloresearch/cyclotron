@@ -304,7 +304,10 @@ the upload. An explicit blank means no license; an existing card's license can b
 Whatever the card's `license_link` ends up naming, one kept from the existing
 card included, must be a file in the upload (a URL is fine), so a linked
 license is never deleted as obsolete.
-There is no silent license default. HPV task IDs remain `<task>_v<version>`,
+There is no silent license default: when a benchmark names none, `publish`
+asks in a terminal whether to add `license: bsd-3-clause` under `version:`, and
+otherwise (including `--dry-run`, which never edits the folder) stops and names
+the line to add. HPV task IDs remain `<task>_v<version>`,
 with the same config mapping and `test` split.
 
 Dry-run makes no remote writes and does not change your benchmark folder. It

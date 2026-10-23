@@ -106,9 +106,10 @@ and settles first (see [start poses](benchmark.md#start-poses-and-their-hub-form
 To start a new benchmark, use the viewer's **New benchmark** UI. New folders
 are saved in `benchmarks/<name>/`. Each starts from a `benchmark.yaml` cyclotron
 writes when `--view` starts, from the pinned HPV's own code: `version: 1`, HPV's
-scoring protocol, robot and policy interface, its newest survival metrics, starting
-run settings you change in the viewer, and no tests. Git ignores them (`benchmarks/.gitignore`), so
-they never make the checkout dirty; to commit one, add a `!/<name>/` line there.
+scoring protocol, robot and policy interface, its newest survival metrics,
+starting run settings you change in the viewer, and no tests. Git ignores them
+(`benchmarks/.gitignore`), so they never make the checkout dirty; to commit one,
+add a `!/<name>/` line there.
 
 Without `--benchmark`, the viewer opens cyclotron's default suite,
 `benchmarks/default/`, in place: saving in the UI changes tracked files in this
