@@ -69,7 +69,7 @@ format or protocol fails there.
 
 ### Scoring protocol 2
 
-The pinned HPV (`5b2f76b`) implements scoring protocol 2, and runs a benchmark
+The pinned HPV (`5c4e24e`) implements scoring protocol 2, and runs a benchmark
 only when its `harness.protocol` is 2 (`--force` runs others, locally only).
 Protocol 2 adds metrics that judge a run by how it ends, so a robot that falls
 and gets back up survives:
@@ -288,7 +288,7 @@ tasks:
     name: humanoid-policy-viewer
     repo: https://github.com/menloresearch/humanoid-policy-viewer
     protocol: 2
-    commit: 5b2f76b85a8470afd7cae1ed84a7fe11ce5ebfec
+    commit: 5c4e24efae725205c667f0c73af237827e11b985
 ```
 
 `name` is the registered harness, `protocol` the scoring protocol the results
