@@ -26,7 +26,8 @@ def eval_path(dataset_id):
 
 
 def merge_results(existing, entries):
-    old = yaml.safe_load(existing) if existing is not None else []
+    # An empty or comment-only file loads as None: no entries yet.
+    old = yaml.safe_load(existing or "") or []
     if not isinstance(old, list):
         raise ValueError("Existing eval-results must be a YAML list; refusing to overwrite")
     def identity(entry):

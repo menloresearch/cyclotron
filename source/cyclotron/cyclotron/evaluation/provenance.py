@@ -18,20 +18,34 @@ def sha256(path):
     return digest.hexdigest()
 
 
+def _check_link(root, path):
+    if path.is_symlink() or (path.exists() and not path.resolve().is_relative_to(root)):
+        raise ValueError(f"Input must not contain symlinks: {path}")
+
+
+def file_names(root):
+    """The files file_manifest(root) hashes, without hashing them."""
+    root = Path(root).resolve()
+    names = []
+    for path in sorted(root.rglob("*")):
+        relative = path.relative_to(root)
+        if any(part.startswith(".") or part == "node_modules" for part in relative.parts):
+            continue
+        _check_link(root, path)
+        if path.is_file():
+            names.append(relative.as_posix())
+    return names
+
+
 def file_manifest(root, names=None):
     root = Path(root).resolve()
-    paths = (root / name for name in names) if names is not None else root.rglob("*")
     result = {}
-    for path in sorted(paths):
-        relative = path.relative_to(root)
-        if names is None and any(part.startswith(".") or part == "node_modules" for part in relative.parts):
-            continue
-        if path.is_symlink() or (path.exists() and not path.resolve().is_relative_to(root)):
-            raise ValueError(f"Input must not contain symlinks: {path}")
-        if path.is_file():
-            result[relative.as_posix()] = sha256(path)
-        elif names is not None:
+    for name in sorted(names) if names is not None else file_names(root):
+        path = root / name
+        _check_link(root, path)
+        if not path.is_file():
             raise ValueError(f"Missing input file: {path}")
+        result[name] = sha256(path)
     return result
 
 

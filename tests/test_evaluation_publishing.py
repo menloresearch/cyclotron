@@ -413,3 +413,20 @@ def test_failed_run_never_gets_completed_manifest(tmp_path, monkeypatch):
     assert read_json(out / "cyclotron.json")["status"] == "failed"
     with pytest.raises(FileExistsError):
         runner.run(ROOT, ["org/model"], output=out)
+
+
+def test_revision_pins_the_first_hub_policy_after_a_local_one(tmp_path, monkeypatch):
+    harness = Mock()
+    harness.inspect_benchmark.return_value = {"errors": [], "problems": []}
+    harness.inspect_policy.side_effect = lambda item: item
+    harness.state.return_value = {"commit": SHA, "dirty": False}
+    harness.run.side_effect = RuntimeError("stop")
+    monkeypatch.setattr(runner, "resolve_benchmark", lambda *a: (harness, {"path": str(tmp_path), "files": {}}))
+    revisions = []
+    def resolve_input(word, kind, select, revision):
+        revisions.append((word, revision))
+        return {"source": "hub" if "/" in word else "local", "path": str(tmp_path), "primary": "policy.onnx"}
+    monkeypatch.setattr(runner, "resolve_input", resolve_input)
+    with pytest.raises(RuntimeError, match="stop"):
+        runner.run(ROOT, ["local", "org/a", "org/b"], revision="v2", output=tmp_path / "result")
+    assert revisions == [("local", "v2"), ("org/a", "v2"), ("org/b", None)]

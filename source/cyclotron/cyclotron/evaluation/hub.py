@@ -5,16 +5,17 @@ import hashlib
 import os
 import re
 import shutil
+import sys
 import tempfile
 from pathlib import Path, PurePosixPath
 from urllib.parse import unquote, urlparse
 
-from .provenance import file_manifest, read_json, write_json
+from ..robot_model import cache_dir
+from .provenance import file_names, read_json, write_json
 
 
 def cache_root():
-    default = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "cyclotron"
-    return Path(os.environ.get("CYCLOTRON_CACHE_DIR", default)).expanduser().resolve()
+    return Path(cache_dir()).resolve()
 
 
 def hub_api():
@@ -79,23 +80,23 @@ def safe_name(name):
 
 
 def _verify_blob(path, sibling):
-    """Hub LFS hashes are SHA256; ordinary files have a Git blob SHA1."""
+    """Hub LFS hashes are SHA256; ordinary files have a Git blob SHA1. Returns the file's SHA256,
+    read in the same pass, for the manifest."""
     lfs = getattr(sibling, "lfs", None)
     expected = (lfs.get("sha256") if isinstance(lfs, dict) else getattr(lfs, "sha256", None)) if lfs else None
-    if expected:
-        from .provenance import sha256
-
-        actual = sha256(path)
-    else:
+    digest = hashlib.sha256()
+    blob = None if expected else hashlib.sha1(f"blob {path.stat().st_size}\0".encode())
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+            if blob:
+                blob.update(chunk)
+    if blob:
         expected = getattr(sibling, "blob_id", None)
-        digest = hashlib.sha1()
-        digest.update(f"blob {path.stat().st_size}\0".encode())
-        with path.open("rb") as stream:
-            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-                digest.update(chunk)
-        actual = digest.hexdigest()
+    actual = blob.hexdigest() if blob else digest.hexdigest()
     if not expected or actual != expected:
         raise ValueError(f"Cannot verify pinned Hub file: {sibling.rfilename}")
+    return digest.hexdigest()
 
 
 def resolve_input(text, repo_type, select_files, revision=None, api=None):
@@ -131,6 +132,7 @@ def download(reference, select_files, api=None):
     destination.parent.mkdir(parents=True, exist_ok=True)
     with FileLock(str(destination) + ".lock"):
         # Check bytes against the pinned remote metadata even when reusing the cache.
+        files = {}
         if destination.exists():
             if not (destination / ".cyclotron-cache.json").is_file():
                 raise ValueError(f"Incomplete cache: {destination}; move it aside and retry")
@@ -138,8 +140,8 @@ def download(reference, select_files, api=None):
                 path = destination / name
                 if not path.is_file() or path.is_symlink() or not path.resolve().is_relative_to(destination):
                     raise ValueError(f"Invalid cached input: {path}; move the cache folder aside and retry")
-                _verify_blob(path, siblings[name])
-            if set(file_manifest(destination)) != set(names):
+                files[name] = _verify_blob(path, siblings[name])
+            if set(file_names(destination)) != set(names):
                 raise ValueError(f"Unexpected cached files: {destination}; move it aside and retry")
         else:
             with tempfile.TemporaryDirectory(prefix=".download-", dir=destination.parent) as temporary:
@@ -153,11 +155,11 @@ def download(reference, select_files, api=None):
                     target = staging / name
                     target.parent.mkdir(parents=True, exist_ok=True)
                     shutil.copyfile(source / name, target)
-                    _verify_blob(target, siblings[name])
-                write_json(staging / ".cyclotron-cache.json", {"sha": sha, "files": file_manifest(staging)})
+                    files[name] = _verify_blob(target, siblings[name])
+                write_json(staging / ".cyclotron-cache.json", {"sha": sha, "files": files})
                 staging.rename(destination)
     return {**reference, "source": "hub", "sha": sha, "endpoint": endpoint,
-            "path": str(destination), "files": file_manifest(destination)}
+            "path": str(destination), "files": files}
 
 
 def working_copy(item, root):
@@ -173,8 +175,14 @@ def working_copy(item, root):
     with FileLock(str(destination) + ".lock"):
         record = destination / ".cyclotron-origin.json"
         if destination.exists():
-            if not record.is_file() or read_json(record).get("identity") != identity:
+            origin = read_json(record) if record.is_file() else {}
+            if origin.get("identity") != identity:
                 raise ValueError(f"Refusing to overwrite working folder: {destination}")
+            # The folder follows the requested revision, not its commit, so edits survive a new commit there.
+            copied = str(origin.get("origin", {}).get("sha"))
+            if copied != item["sha"]:
+                print(f"Warning: {destination} was copied from {item['id']}@{copied[:12]}, but {item['revision']} "
+                      f"is now {item['sha'][:12]}; move the folder aside to start from the new revision", file=sys.stderr)
         else:
             with tempfile.TemporaryDirectory(prefix=".working-", dir=root) as temporary:
                 staged = Path(temporary) / "files"

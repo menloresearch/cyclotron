@@ -19,6 +19,7 @@ Plain Python with no Isaac Lab imports, so it can run without Isaac Sim and in t
 from __future__ import annotations
 
 import fcntl
+import hashlib
 import os
 import posixpath
 import re
@@ -281,11 +282,11 @@ def load_training_robot_model(env_cfg, run_dir: str, log=_print) -> tuple[str | 
     try:
         urdf = materialize(trained, _local_objects(current), log)
         # Isaac Lab converts the urdf into /tmp/IsaacLab/usd_<second>_<number from the seeded random module>, which
-        # processes building their scene in the same second with the same seed share; its own folder keeps another
-        # model's conversion out.
-        usd_dir = os.path.join(tempfile.gettempdir(), "IsaacLab")
-        os.makedirs(usd_dir, exist_ok=True)
-        spawn.usd_dir = tempfile.mkdtemp(prefix="usd_", dir=usd_dir)
+        # processes building their scene in the same second with the same seed share. A folder of its own per cached
+        # model keeps another model's conversion out, and lets Isaac Lab reuse this one's instead of converting again.
+        key = hashlib.sha256(os.path.realpath(urdf).encode()).hexdigest()[:16]
+        spawn.usd_dir = os.path.join(tempfile.gettempdir(), "IsaacLab", f"cyclotron_{key}")
+        os.makedirs(spawn.usd_dir, exist_ok=True)
     except (RobotModelUnavailable, OSError) as error:
         unavailable = f"The robot model the run was trained with couldn't be loaded: {error}. {_supply_hint(trained)}"
         if not os.path.isfile(current):

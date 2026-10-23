@@ -108,10 +108,13 @@ def run(root, policies, benchmark=None, harness_name=None, revision=None, output
         raise ValueError("Invalid benchmark:\n" + "\n".join(inspection["errors"]))
     if inspection["problems"] and "force" not in options:
         raise ValueError("Incompatible benchmark:\n" + "\n".join(inspection["problems"]))
-    models = [harness.inspect_policy(resolve_input(word, "model", harness.model_files, revision if index == 0 else None))
-              for index, word in enumerate(policies)]
-    if not models:
-        raise ValueError("Give at least one policy to benchmark")
+    models = []
+    for word in policies:
+        item = resolve_input(word, "model", harness.model_files, revision)
+        if item.get("source") == "hub":
+            # --revision pins the first Hub policy only, as for --view.
+            revision = None
+        models.append(harness.inspect_policy(item))
     directory = Path(output).expanduser().resolve() if output else harness.results / datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S_%fZ")
     directory.mkdir(parents=True, exist_ok=False)
     manifest = {
@@ -125,8 +128,13 @@ def run(root, policies, benchmark=None, harness_name=None, revision=None, output
         harness.run([str(Path(model["path"]) / model["primary"]) for model in models], dataset["path"], directory, options)
         native = harness.normalize_result(read_json(directory / "result.json"))
         errors = harness.binding_errors(native, manifest)
-        for item in [dataset, *models]:
-            if file_manifest(item["path"]) != item["files"]:
+        # A policy records only the files the harness loads; the benchmark, its whole folder.
+        for item, names in [(dataset, None), *((model, list(model["files"])) for model in models)]:
+            try:
+                changed = file_manifest(item["path"], names) != item["files"]
+            except ValueError:
+                changed = True
+            if changed:
                 errors.append(f"Input changed during execution: {item['path']}")
         if harness.state() != manifest["harness"] or git_state(root) != manifest["cyclotron"]:
             errors.append("Code checkout changed during execution")

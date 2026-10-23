@@ -1,22 +1,6 @@
 """Small explicit adapter registry: datasets never supply executable plugins."""
 
 import os
-from typing import Protocol
-
-
-class HarnessAdapter(Protocol):
-    name: str
-    repo: str
-
-    def prepare(self): ...
-    def fetch_history(self): ...
-    def view(self, policies, benchmark, options): ...
-    def run(self, policies, benchmark, output, options): ...
-    def view_result(self, directory, options): ...
-    def inspect_benchmark(self, directory, commit=None): ...
-    def task_harness(self, inspection, commit): ...
-    def normalize_result(self, result): ...
-    def submit_blockers(self, result, manifest): ...
 
 
 def eval_harness(spec):
@@ -34,9 +18,14 @@ def select_harness(root, explicit=None, benchmark=None, spec=None):
 
     registry = {HPV.name: HPV}
     aliases = {HPV.repo: HPV.name}
-    harness = (benchmark or {}).get("harness", {})
+    harness = (benchmark or {}).get("harness") or {}
+    if not isinstance(harness, dict):
+        raise ValueError("benchmark.yaml's harness must be a mapping")
     declared = harness.get("name")
-    repository = harness.get("repo", "").removesuffix(".git").rstrip("/")
+    repository = harness.get("repo") or ""
+    if not isinstance(repository, str) or (declared is not None and not isinstance(declared, str)):
+        raise ValueError("benchmark.yaml's harness.name and harness.repo must be strings")
+    repository = repository.removesuffix(".git").rstrip("/")
     by_repo = aliases.get(repository)
     if repository and not by_repo:
         raise ValueError(f"No installed adapter for harness repository {repository}")

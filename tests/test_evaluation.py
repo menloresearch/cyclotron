@@ -108,6 +108,12 @@ def test_adapter_registry(monkeypatch):
             select_harness(ROOT, benchmark=raw)
     with pytest.raises(ValueError, match="available"):
         select_harness(ROOT, "other")
+    # A blank harness block is no declaration; a wrongly typed one is a clean error, not a traceback.
+    assert select_harness(ROOT, benchmark={"harness": None}).name == HPV.name
+    assert select_harness(ROOT, benchmark={"harness": {"repo": None}}).name == HPV.name
+    for raw in ({"harness": "hpv"}, {"harness": {"repo": 1}}, {"harness": {"name": ["hpv"]}}):
+        with pytest.raises(ValueError, match="benchmark.yaml's harness"):
+            select_harness(ROOT, benchmark=raw)
 
 
 def test_published_harness_is_selected(monkeypatch):
@@ -256,7 +262,7 @@ def test_failed_download_leaves_no_completed_cache(fake_hub):
     assert not list(hub.cache_root().rglob(".cyclotron-cache.json"))
 
 
-def test_working_copy_preserves_edits(tmp_path):
+def test_working_copy_preserves_edits(tmp_path, capsys):
     source = tmp_path / "source"
     source.mkdir()
     (source / "benchmark.yaml").write_text("original")
@@ -264,9 +270,40 @@ def test_working_copy_preserves_edits(tmp_path):
             "endpoint": "https://huggingface.co"}
     working = hub.working_copy(item, tmp_path / "workspaces")
     (working / "benchmark.yaml").write_text("edited")
+    capsys.readouterr()
     again = hub.working_copy({**item, "sha": "b" * 40}, tmp_path / "workspaces")
     assert again == working and (again / "benchmark.yaml").read_text() == "edited"
     assert (source / "benchmark.yaml").read_text() == "original"
+    # main moved on: the edits are kept, and the researcher is told the copy is older.
+    assert f"copied from org/suite@{SHA[:12]}, but main is now {'b' * 12}" in capsys.readouterr().err
+    hub.working_copy(item, tmp_path / "workspaces")
+    assert "Warning" not in capsys.readouterr().err
+
+
+def test_an_empty_cache_variable_is_unset(tmp_path, monkeypatch):
+    from cyclotron import robot_model
+
+    monkeypatch.setenv("CYCLOTRON_CACHE_DIR", "")
+    monkeypatch.setenv("XDG_CACHE_HOME", "")
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path / "..")
+    assert hub.cache_root() == (tmp_path / ".cache" / "cyclotron").resolve()
+    assert hub.cache_root() == Path(robot_model.cache_dir()).resolve()
+
+
+def test_a_lone_onnx_records_only_the_files_the_viewer_loads(tmp_path, monkeypatch):
+    # ~/Downloads/policy.onnx: the rest of the folder is neither hashed nor checked for symlinks.
+    (tmp_path / "policy.onnx").write_bytes(b"model")
+    (tmp_path / "env.yaml").write_text("{}")
+    (tmp_path / "unrelated.zip").write_bytes(b"x")
+    (tmp_path / "link").symlink_to(tmp_path / "unrelated.zip")
+    (tmp_path / "other").mkdir()
+    (tmp_path / "other/file").write_text("y")
+    harness = HPV(ROOT)
+    monkeypatch.setattr(harness, "inspect", lambda kind, path: {
+        "errors": [], "policyDir": str(tmp_path), "primary": "policy.onnx", "hashes": {}})
+    policy = harness.inspect_policy({"source": "local", "path": str(tmp_path / "policy.onnx")})
+    assert set(policy["files"]) == {"policy.onnx", "env.yaml"}
 
 
 @pytest.fixture
@@ -307,6 +344,12 @@ def test_full_suite_blockers(recorded_result):
         changed = copy.deepcopy(run)
         mutation(changed)
         assert harness.submit_blockers(changed, manifest)
+    # No protocol on either side is a blocker, not a KeyError when the entries are built.
+    unversioned = copy.deepcopy(manifest)
+    del unversioned["inspection"]["raw"]["harness"]["protocol"]
+    changed = copy.deepcopy(run)
+    del changed["provenance"]["hpv"]["protocol"]
+    assert "Benchmark protocol differs from the HPV runtime protocol" in harness.submit_blockers(changed, unversioned)
     manifest["options"] = ["force"]
     assert harness.submit_blockers(run, manifest)
 
@@ -337,9 +380,12 @@ def test_eval_yaml_merge_and_quoted_date(recorded_result):
     assert len(yaml.safe_load(text)) == 2
     assert yaml.safe_load(text)[-1]["value"] == 0.9
     assert "cyclotron@" in text
-    for malformed in ("oops: true", "", "- nope"):
+    for malformed in ("oops: true", "- nope"):
         with pytest.raises(ValueError):
             merge_results(malformed, entries)
+    # An existing but empty file holds no entries to keep.
+    for empty in ("", "# cleared\n"):
+        assert len(yaml.safe_load(merge_results(empty, entries))) == 1
     run["tasks"]["m0"][0]["value"] = float("nan")
     with pytest.raises(ValueError, match="Non-finite"):
         build_entries(run, manifest, "m0", manifest["policies"][0])

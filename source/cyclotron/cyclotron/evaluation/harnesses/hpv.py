@@ -178,9 +178,6 @@ class HPV:
     def inspect_benchmark(self, directory, commit=None):
         return self.inspect("benchmark", directory, *([commit] if commit else []))
 
-    def task_specs(self, inspection):
-        return inspection["tasks"]
-
     def task_harness(self, inspection, commit):
         # Each eval.yaml task names the harness that runs and scores it, under the benchmark's protocol.
         protocol = (inspection["raw"].get("harness") or {}).get("protocol")
@@ -190,9 +187,16 @@ class HPV:
         info = self.inspect("policy", item["path"])
         if info["errors"]:
             raise ValueError(f"{item['path']} cannot be run:\n" + "\n".join(f"  - {error}" for error in info["errors"]))
-        directory = Path(info["policyDir"])
-        return {**item, "path": str(directory), "primary": info["primary"], "hpv_hashes": info["hashes"],
-                "files": file_manifest(directory)}
+        directory = Path(info["policyDir"]).resolve()
+        if item.get("files") is not None and Path(item["path"]).resolve() == directory:
+            # A Hub download's manifest, hashed as it was verified.
+            files = item["files"]
+        else:
+            # Only the files the viewer loads: a lone .onnx's folder may be ~/Downloads.
+            present = [path.relative_to(directory).as_posix() for folder in (directory, directory / "params")
+                       if folder.is_dir() for path in folder.iterdir() if path.is_file()]
+            files = file_manifest(directory, self.model_files(present))
+        return {**item, "path": str(directory), "primary": info["primary"], "hpv_hashes": info["hashes"], "files": files}
 
     def normalize_result(self, result):
         if result.get("schema") != "hpv-benchmark-result/1":
@@ -221,7 +225,7 @@ class HPV:
         provenance = run.get("provenance", {}).get("hpv", {})
         if provenance.get("dirty") is not False or not provenance.get("commit"):
             reasons.append("HPV reported a dirty or unknown checkout")
-        if inspection["raw"].get("harness", {}).get("protocol") != provenance.get("protocol"):
+        if not provenance.get("protocol") or (inspection["raw"].get("harness") or {}).get("protocol") != provenance["protocol"]:
             reasons.append("Benchmark protocol differs from the HPV runtime protocol")
         if inspection["errors"] or inspection["problems"] or run.get("benchmark", {}).get("problems"):
             reasons.append("Benchmark validation or compatibility checks failed")
