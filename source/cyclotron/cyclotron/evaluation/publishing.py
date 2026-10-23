@@ -1,5 +1,6 @@
 """Publish benchmark folders authored in a harness; no benchmark editor here."""
 
+import re
 import shutil
 import tempfile
 from pathlib import Path
@@ -9,6 +10,23 @@ import yaml
 from .harnesses.base import select_harness
 from .hub import cache_root, commit_files, download, hub_api, on_main, parse_reference, safe_name
 from .provenance import file_manifest, git_state, read_json, write_json
+
+# What publish offers to add when a benchmark names no license (see cli.py).
+DEFAULT_LICENSE = "bsd-3-clause"
+
+
+class MissingLicense(ValueError):
+    """A benchmark without a license: publication needs a deliberate choice, never a silent default."""
+
+
+def add_license(directory, license_id=DEFAULT_LICENSE):
+    """Writes `license: <id>` into the folder's benchmark.yaml after its version line, where HPV's docs put it."""
+    path = Path(directory).expanduser() / "benchmark.yaml"
+    text = path.read_text()
+    version = re.search(r"^version:.*\n", text, re.M)
+    at = version.end() if version else len(text)
+    path.write_text(text[:at] + ("" if at == 0 or text[at - 1] == "\n" else "\n") + f"license: {license_id}\n" + text[at:])
+    return path
 
 
 def split_card(text):
@@ -43,7 +61,8 @@ def hub_files(inspection, directory, previous=None, *, harness):
     front, body = split_card(readme.read_text() if readme.is_file() else f"# {name}\n")
     card = {**front, **inspection["card"]}
     if "license" not in raw and not front.get("license"):
-        raise ValueError("Set license in benchmark.yaml (an explicit blank means no license) before publishing")
+        raise MissingLicense(f"Set license in benchmark.yaml before publishing, for example license: {DEFAULT_LICENSE} "
+                             "(a Hugging Face license id; an explicit blank means no license)")
     if "license" in raw:
         for key in ("license", "license_name", "license_link"):
             card.pop(key, None)

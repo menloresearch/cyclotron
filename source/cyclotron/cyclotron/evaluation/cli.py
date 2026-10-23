@@ -136,7 +136,21 @@ def main(root, argv=None, viewing=False):
         from .publishing import publish, release
 
         if action == "publish":
-            result = publish(root, args.directory, args.dataset, args.base, args.create, args.pr, args.dry_run, args.harness)
+            from .publishing import DEFAULT_LICENSE, MissingLicense, add_license
+
+            def publication():
+                return publish(root, args.directory, args.dataset, args.base, args.create, args.pr, args.dry_run, args.harness)
+
+            try:
+                result = publication()
+            except MissingLicense:
+                # Offered, never assumed; a dry run leaves the folder as it is.
+                if args.dry_run or not sys.stdin.isatty():
+                    raise
+                if input(f"benchmark.yaml has no license. Add license: {DEFAULT_LICENSE}? [y/N] ").strip().lower() not in ("y", "yes"):
+                    raise
+                print(f"Added license: {DEFAULT_LICENSE} to {add_license(args.directory)}")
+                result = publication()
             if args.dry_run and result["blockers"]:
                 # Everything is printed first; then fail, as the publication itself would.
                 raise SystemExit(1)

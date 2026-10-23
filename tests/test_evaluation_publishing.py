@@ -114,6 +114,40 @@ def test_license_requires_deliberate_choice(tmp_path, inspection):
     assert "license:" not in publishing.hub_files(inspection, tmp_path, harness=HARNESS)["README.md"]
 
 
+def test_publish_offers_a_license_and_never_assumes_one(tmp_path, monkeypatch):
+    from cyclotron.evaluation import cli
+
+    folder = tmp_path / "suite"
+    folder.mkdir()
+    original = "name: suite\nversion: 1                # bump\nharness: {}\n"
+    calls = []
+
+    def publish(root, directory, *rest):
+        calls.append(rest)
+        if "license:" not in (folder / "benchmark.yaml").read_text():
+            raise publishing.MissingLicense("Set license in benchmark.yaml before publishing")
+        return {"blockers": []}
+
+    monkeypatch.setattr(publishing, "publish", publish)
+    monkeypatch.setattr(cli.sys, "stdin", SimpleNamespace(isatty=lambda: True))
+    # Declined, a dry run, or no terminal: the folder is left as it is.
+    for argv, tty, answer in [([], True, "n"), (["--dry-run"], True, "y"), ([], False, "y")]:
+        (folder / "benchmark.yaml").write_text(original)
+        monkeypatch.setattr(cli.sys.stdin, "isatty", lambda tty=tty: tty)
+        monkeypatch.setattr("builtins.input", lambda prompt, answer=answer: answer)
+        with pytest.raises(publishing.MissingLicense):
+            cli.main(ROOT, ["publish", str(folder), "org/suite", *argv])
+        assert (folder / "benchmark.yaml").read_text() == original
+    # Accepted: the line goes after version, as HPV's docs place it, and publication goes on.
+    calls.clear()
+    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr("builtins.input", lambda prompt: "y")
+    cli.main(ROOT, ["publish", str(folder), "org/suite", "--create"])
+    assert (folder / "benchmark.yaml").read_text() == (
+        "name: suite\nversion: 1                # bump\nlicense: bsd-3-clause\nharness: {}\n")
+    assert len(calls) == 2
+
+
 def test_tag_is_idempotent_but_never_moved():
     api = Mock()
     api.list_repo_refs.return_value.tags = [SimpleNamespace(name="v2", target_commit=SHA)]
