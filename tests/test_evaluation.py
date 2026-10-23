@@ -4,6 +4,7 @@ import copy
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 import sys
 from datetime import datetime
@@ -17,7 +18,7 @@ import yaml
 from cyclotron.evaluation import hub, provenance, runner
 from cyclotron.evaluation.harnesses.base import select_harness
 from cyclotron.evaluation.harnesses.hpv import HPV
-from cyclotron.evaluation.cli import parse_run
+from cyclotron.evaluation.cli import main, parse_run
 from cyclotron.evaluation.eval_results import build_entries, merge_results, submit
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -262,22 +263,48 @@ def test_failed_download_leaves_no_completed_cache(fake_hub):
     assert not list(hub.cache_root().rglob(".cyclotron-cache.json"))
 
 
-def test_working_copy_preserves_edits(tmp_path, capsys):
-    source = tmp_path / "source"
-    source.mkdir()
-    (source / "benchmark.yaml").write_text("original")
+def test_pull_copies_a_hub_benchmark_to_edit(tmp_path):
+    source = tmp_path / "cache/org__suite"
+    (source / "data/flat").mkdir(parents=True)
+    for name in ("benchmark.yaml", "README.md", "eval.yaml", "data/flat/test.jsonl", ".cyclotron-cache.json", ".hf-dataset.json"):
+        (source / name).write_text(name)
     item = {"path": str(source), "id": "org/suite", "sha": SHA, "revision": "main", "source": "hub",
-            "endpoint": "https://huggingface.co"}
-    working = hub.working_copy(item, tmp_path / "workspaces")
-    (working / "benchmark.yaml").write_text("edited")
-    capsys.readouterr()
-    again = hub.working_copy({**item, "sha": "b" * 40}, tmp_path / "workspaces")
-    assert again == working and (again / "benchmark.yaml").read_text() == "edited"
-    assert (source / "benchmark.yaml").read_text() == "original"
-    # main moved on: the edits are kept, and the researcher is told the copy is older.
-    assert f"copied from org/suite@{SHA[:12]}, but main is now {'b' * 12}" in capsys.readouterr().err
-    hub.working_copy(item, tmp_path / "workspaces")
-    assert "Warning" not in capsys.readouterr().err
+            "endpoint": "https://huggingface.co", "files": {}}
+    pulled = hub.editable_copy(item, tmp_path / "benchmarks/suite")
+    # The cache's records stay behind (HPV's would make the copy read-only); publication builds eval.yaml again.
+    assert provenance.file_names(pulled) == ["README.md", "benchmark.yaml", "data/flat/test.jsonl"]
+    assert [path.name for path in pulled.glob(".*")] == [".cyclotron-origin.json"]
+    assert provenance.read_json(pulled / ".cyclotron-origin.json") == {"origin": {
+        "id": "org/suite", "endpoint": "https://huggingface.co", "revision": "main", "sha": SHA}}
+    (pulled / "benchmark.yaml").write_text("edited")
+    with pytest.raises(ValueError, match="already exists"):
+        hub.editable_copy({**item, "sha": "b" * 40}, pulled)
+    assert (pulled / "benchmark.yaml").read_text() == "edited"
+    assert (source / "benchmark.yaml").read_text() == "benchmark.yaml"
+
+
+def test_pull_puts_a_hub_benchmark_in_benchmarks(monkeypatch, tmp_path):
+    (tmp_path / "benchmark.yaml").write_text("name: suite\n")
+    item = {"path": str(tmp_path), "id": "org/suite"}
+    monkeypatch.setattr(runner, "resolve_input", lambda word, kind, select: item if word == "datasets/org/suite@v1" else None)
+    copy = Mock()
+    monkeypatch.setattr(runner, "editable_copy", copy)
+    runner.pull(ROOT, "datasets/org/suite@v1")
+    copy.assert_called_once_with(item, ROOT / "benchmarks/suite")
+    runner.pull(ROOT, "datasets/org/suite@v1", tmp_path / "elsewhere")
+    assert copy.call_args.args == (item, tmp_path / "elsewhere")
+    with pytest.raises(ValueError, match="pull copies a Hub benchmark"):
+        runner.pull(ROOT, str(tmp_path))
+    (tmp_path / "benchmark.yaml").unlink()
+    with pytest.raises(ValueError, match="not a benchmark"):
+        runner.pull(ROOT, "datasets/org/suite@v1")
+
+
+def test_pull_is_a_benchmark_action(monkeypatch):
+    pull = Mock()
+    monkeypatch.setattr(runner, "pull", pull)
+    main(ROOT, ["pull", "datasets/org/suite", "./mine"])
+    pull.assert_called_once_with(ROOT, "datasets/org/suite", "./mine", None)
 
 
 def test_an_empty_cache_variable_is_unset(tmp_path, monkeypatch):
@@ -464,8 +491,9 @@ def test_child_args_are_local_and_headless(monkeypatch, tmp_path):
     harness.run([str(tmp_path / "policy")], str(tmp_path / "suite"), tmp_path / "out", ["jobs=2"])
     assert f"out={tmp_path / 'out'}" in execute.call_args.args[0]
     env = harness.env()
-    assert env["HPV_BENCHMARKS_DIR"].startswith(str(ROOT / "logs"))
-    # New benchmarks start from cyclotron's default suite; HPV's debug logs stay out of its checkout.
+    # New benchmarks start from cyclotron's default suite and are saved beside it; HPV's debug logs stay
+    # out of its checkout.
+    assert env["HPV_BENCHMARKS_DIR"] == str(ROOT / "benchmarks")
     assert env["HPV_BENCHMARK_TEMPLATE"] == str(ROOT / "benchmarks/default")
     assert env["HPV_LOG_DIR"] == str(tmp_path / "cache/harnesses" / HPV.name / "logs")
     assert "HF_TOKEN" not in env
@@ -558,11 +586,30 @@ def test_default_benchmark_is_cyclotrons_own_and_opens_in_place(monkeypatch, tmp
     assert Path(item["path"]) == ROOT / "benchmarks/default"
     assert harness.name == HPV.name and {"benchmark.yaml", "data/locomotion/test.jsonl"} <= set(item["files"])
     monkeypatch.setattr(runner, "resolve_input", lambda *a: {"path": str(tmp_path / "policy")})
-    monkeypatch.setattr(runner, "working_copy", Mock(side_effect=AssertionError("the default was copied")))
     opened = Mock()
-    monkeypatch.setattr(HPV, "view", lambda self, policies, benchmark, options: opened(policies, benchmark))
+    monkeypatch.setattr(HPV, "view", lambda self, policies, benchmark, options, hub: opened(policies, benchmark, hub))
     runner.view(ROOT, ["org/model"])
-    opened.assert_called_once_with([str(tmp_path / "policy")], str(ROOT / "benchmarks/default"))
+    opened.assert_called_once_with([str(tmp_path / "policy")], str(ROOT / "benchmarks/default"), None)
+
+
+def test_a_hub_benchmark_opens_read_only_from_the_cache(monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr(HPV, "prepare", lambda self: None)
+    cached = tmp_path / "cache/org__suite"
+    shutil.copytree(ROOT / "benchmarks/default", cached)
+    item = {"source": "hub", "repo_type": "dataset", "id": "org/suite", "revision": "v1", "sha": SHA,
+            "endpoint": "https://huggingface.co", "path": str(cached)}
+    monkeypatch.setattr(runner, "resolve_input", lambda word, kind, select: item)
+    execute = Mock()
+    monkeypatch.setattr(HPV, "execute", lambda self, args: execute(args))
+    monkeypatch.setenv("SSH_CONNECTION", "test")
+    policy = tmp_path / "policy.onnx"
+    policy.write_bytes(b"onnx")
+    runner.view(ROOT, [str(policy)], "datasets/org/suite@v1")
+    assert f"benchmark={cached}" in execute.call_args.args[0]
+    # HPV's viewer refuses edits to a folder holding its Hub download record; the cache checks skip it.
+    assert provenance.read_json(cached / ".hf-dataset.json") == {"id": "org/suite", "revision": "v1", "sha": SHA}
+    assert ".hf-dataset.json" not in provenance.file_names(cached)
+    assert "to edit it: ./cyclotron.sh --benchmark pull datasets/org/suite@v1" in capsys.readouterr().out
 
 
 @pytest.mark.skipif(not __import__("shutil").which("node")

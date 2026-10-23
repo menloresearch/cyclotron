@@ -14,6 +14,9 @@ _build/
 *.usdc
 *.usdz
 
+# Which Hub commit a pulled benchmark matches (./cyclotron.sh --benchmark pull); publish keeps it current
+.cyclotron-origin.json
+
 # Training outputs and checkpoints
 logs/
 outputs/

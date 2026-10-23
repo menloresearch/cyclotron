@@ -10,7 +10,7 @@ import sys
 from pathlib import Path
 
 from ..hub import cache_root
-from ..provenance import file_manifest, git_state
+from ..provenance import file_manifest, git_state, write_json
 
 INSPECTION_SCHEMAS = {"benchmark": "hpv-inspection/1", "policy": "hpv-policy-inspection/1"}
 
@@ -26,8 +26,9 @@ class HPV:
     def __init__(self, root):
         self.root = Path(root).resolve()
         self.path = self.root / "third_party" / self.name
-        self.results = self.root / "logs" / "benchmarks" / self.name
-        self.workspaces = self.root / "logs" / "benchmark_workspaces" / self.name
+        self.results = self.root / "logs" / "benchmark_results"
+        # Where the viewer's "New benchmark" and --benchmark pull put benchmarks: beside the default, to commit.
+        self.benchmarks = self.root / "benchmarks"
         self._prepared = False
 
     @staticmethod
@@ -104,11 +105,11 @@ class HPV:
         owned = cache_root() / "harnesses" / self.name
         temporary = owned / "tmp"
         temporary.mkdir(parents=True, exist_ok=True)
-        # HPV's "New benchmark" starts from cyclotron's own default suite, and nothing HPV
-        # writes lands in its checkout.
+        # HPV's "New benchmark" starts from cyclotron's own default suite and saves beside it;
+        # HPV's caches and logs stay out of the checkout.
         env.update(HPV_CACHE_DIR=str(owned), HPV_POLICY_LIBRARY_DIR=str(owned / "policies"),
                    HPV_POLICY_ROOTS="policies", HPV_BENCHMARK_RESULTS_DIR=str(self.results),
-                   HPV_BENCHMARKS_DIR=str(self.workspaces), HPV_BENCHMARK_TEMPLATE=str(self.root / DEFAULT_BENCHMARK),
+                   HPV_BENCHMARKS_DIR=str(self.benchmarks), HPV_BENCHMARK_TEMPLATE=str(self.root / DEFAULT_BENCHMARK),
                    HPV_LOG_DIR=str(owned / "logs"), TMPDIR=str(temporary))
         # No harness operation should ever need Hub credentials or the Hub: HPV gets local paths
         # only, and should a Hub ID still reach it, it finds no saved token and no Hub to ask.
@@ -157,7 +158,13 @@ class HPV:
                 words.append("no-open")
         return words
 
-    def view(self, policies, benchmark, options):
+    def view(self, policies, benchmark, options, hub=None):
+        if hub:
+            # HPV's viewer refuses edits to a folder holding its Hub download record, so the pinned
+            # cache stays as published; cyclotron's cache checks skip dotfiles.
+            record = Path(benchmark) / ".hf-dataset.json"
+            if not record.is_file():
+                write_json(record, {key: hub[key] for key in ("id", "revision", "sha")})
         # HPV lists every policy, labelled by its shortest distinguishing path, and selects the first.
         words = [f"policy={policy}" for policy in policies]
         self.execute(["scripts/hf.mjs", *words, f"benchmark={benchmark}", *self.headless_options(options)])

@@ -8,7 +8,7 @@ import yaml
 
 from .harnesses.base import select_harness
 from .hub import cache_root, commit_files, download, hub_api, on_main, parse_reference, safe_name
-from .provenance import file_manifest, git_state, read_json
+from .provenance import file_manifest, git_state, read_json, write_json
 
 
 def split_card(text):
@@ -71,7 +71,7 @@ def version_check(current, previous):
 
 
 def working_origin(directory, repo_id, endpoint):
-    """The Hub commit a working copy of this dataset was made from (see hub.working_copy), if it is one."""
+    """The Hub commit a folder pulled from this dataset matches (see hub.editable_copy), if it is one."""
     record = directory / ".cyclotron-origin.json"
     if not record.is_file():
         return None
@@ -122,15 +122,15 @@ def publish(root, directory, repo_id, base=None, create=False, pr=False, dry_run
         if info is None or api.repo_info(repo_id, repo_type="dataset", revision=base).sha != info.sha:
             raise ValueError("--base must still identify the dataset's current main commit")
     elif info:
-        # A Hub working copy's base is the commit it was copied from, so newer upstream changes
-        # are never overwritten by edits made to an older copy.
+        # A pulled folder's base is the commit it was pulled from or last published as, so newer
+        # upstream changes are never overwritten by edits made to an older copy.
         origin = working_origin(directory, info.id, api.endpoint.rstrip("/"))
         if origin and origin["sha"] != info.sha:
             raise ValueError(
-                f"datasets/{info.id} main moved since this working copy was made from {origin.get('revision')} "
-                f"({origin['sha']}); main is now {info.sha}. To keep those changes, open the current main as a "
-                f"new working folder (./cyclotron.sh --view <policy> --benchmark datasets/{info.id}@{info.sha}) "
-                f"and carry your edits over; to publish this folder over them, pass --base {info.sha}")
+                f"datasets/{info.id} main moved since this folder was pulled from {origin.get('revision')} "
+                f"({origin['sha']}); main is now {info.sha}. To keep those changes, pull the current main into "
+                f"a new folder (./cyclotron.sh --benchmark pull datasets/{info.id} <folder>) and carry your "
+                f"edits over; to publish this folder over them, pass --base {info.sha}")
     if info:
         previous = Path(download({"id": repo_id, "repo_type": "dataset", "revision": info.sha}, harness.dataset_files, api)["path"])
     # The harness's public-commit check needs its upstream history, which a shallow clone lacks.
@@ -194,6 +194,10 @@ def publish(root, directory, repo_id, base=None, create=False, pr=False, dry_run
         result = commit_files(api, repo_id, files, info.sha, f"Publish {raw['name']} v{raw['version']}",
                               repo_type="dataset", pr=pr, deletions=deletions)
         print(f"Published: {result.pr_url or result.commit_url}")
+        origin = None if result.pr_url else working_origin(directory, repo_id, api.endpoint.rstrip("/"))
+        if origin:
+            # The pulled folder is now main, so its next publication builds on this commit.
+            write_json(directory / ".cyclotron-origin.json", {"origin": {**origin, "revision": "main", "sha": result.oid}})
         new_version = old_inspection is None or raw["version"] > old_inspection["raw"]["version"]
         if result.pr_url:
             print(f"After merging, run: ./cyclotron.sh --benchmark release {repo_id} <merged-commit>")

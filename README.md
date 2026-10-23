@@ -241,22 +241,25 @@ without uploading.
 ./cyclotron.sh --benchmark <org>/<model> ./my-benchmark --jobs 2
 
 # Inspect the output
-./cyclotron.sh --benchmark view logs/benchmarks/humanoid-policy-viewer/<timestamp>
+./cyclotron.sh --benchmark view logs/benchmark_results/<timestamp>
 
 # Check a run's eligibility and proposed Hub score entries without uploading
 ./cyclotron.sh --benchmark submit <result-directory> --dry-run
 ```
 
-Results live in `logs/benchmarks/<harness>/<timestamp>/`: HPV's `result.json`
+Results live in `logs/benchmark_results/<timestamp>/`: HPV's `result.json`
 and `report.html`, plus cyclotron's input/revision provenance. Runs using
 local folders remain local-only; submission requires pinned Hub model and
 benchmark inputs, clean code and a complete unmodified suite.
 
-Author benchmarks in HPV's existing UI, then publish the saved folder:
+Benchmarks live in `benchmarks/`: the viewer's **New benchmark** saves there,
+and `--benchmark pull` copies a published one there to edit. Edit them in
+HPV's existing UI, commit them, then publish:
 
 ```bash
-./cyclotron.sh --view <org>/<model> --benchmark ./my-benchmark
-./cyclotron.sh --benchmark publish ./my-benchmark <org>/<dataset> --create --dry-run
+./cyclotron.sh --benchmark pull datasets/<org>/<dataset>    # or start one with New benchmark
+./cyclotron.sh --view <org>/<model> --benchmark benchmarks/<dataset>
+./cyclotron.sh --benchmark publish benchmarks/<dataset> <org>/<dataset> --dry-run
 ```
 
 Python manages Hub access; Node still runs HPV. No TUI or training CLI
@@ -304,7 +307,8 @@ Options: `--revision <ref>` (branch, tag or commit of the first Hub policy),
 `--port <n>` (default 3000), `--no-open`, `--harness <name>` and
 `--benchmark <folder or dataset>`.
 Private or gated repos use `hf auth login` or `HF_TOKEN`. HPV keeps the full
-benchmark editing UI; cyclotron supplies the working folder and publishes it.
+benchmark editing UI; cyclotron opens Hub benchmarks read-only, pulls them
+into `benchmarks/` to edit, and publishes them.
 
 The viewer simulates with MuJoCo, not PhysX, so it doubles as a quick
 sim2sim check. It builds the policy's input term by term from

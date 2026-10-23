@@ -36,7 +36,7 @@ continue to call the original Isaac Lab train/play/export scripts directly.
 ./cyclotron.sh --benchmark ./policy-a ./policy-b ./my-benchmark jobs=2
 ```
 
-The default output is `logs/benchmarks/humanoid-policy-viewer/<timestamp>/`:
+The default output is `logs/benchmark_results/<timestamp>/`:
 
 - `result.json`: unchanged native HPV result, with cells, tasks and runtime details.
 - `report.html`: HPV's report.
@@ -126,7 +126,7 @@ for simulation details.
 ## View results
 
 ```bash
-./cyclotron.sh --benchmark view logs/benchmarks/humanoid-policy-viewer/<timestamp> --no-open
+./cyclotron.sh --benchmark view logs/benchmark_results/<timestamp> --no-open
 ```
 
 Native HPV/browser results remain viewable without a cyclotron manifest.
@@ -146,7 +146,8 @@ Submission requires:
 
 - A complete cyclotron-generated manifest, unchanged result and matching inputs.
 - Both policy and dataset resolved from the Hub at immutable commits; local
-  working folders are not made eligible by attaching a repo ID afterward.
+  folders, pulled ones included, are not made eligible by attaching a repo ID
+  afterward.
 - A dataset commit in the dataset's main history: a pending PR's revision
   (`@refs/pr/<n>`) is refused until the PR is merged.
 - Known, clean cyclotron and harness checkouts when the run was made.
@@ -192,11 +193,14 @@ Author the benchmark in HPV's existing UI:
 ./cyclotron.sh --view <org>/<model> --benchmark ./my-benchmark
 ```
 
-HPV edits and saves that exact folder. New benchmarks created in its UI live
-under `logs/benchmark_workspaces/humanoid-policy-viewer/` and start as a copy
-of `benchmarks/default/`. See
-[editing a benchmark](view.md#edit-a-benchmark-in-hpv). Cyclotron does not
+HPV edits and saves that exact folder. New benchmarks created in its UI are
+saved in `benchmarks/<name>/` and start as a copy of `benchmarks/default/`; to
+change a published benchmark, `--benchmark pull` it into `benchmarks/` first.
+See [editing a benchmark](view.md#edit-a-benchmark-in-hpv). Cyclotron does not
 reimplement test creation, task configuration or visualization.
+
+Benchmarks in `benchmarks/` are meant to be committed. Until one is, its
+untracked folder makes the checkout dirty, so commit it before publishing.
 
 After saving, publish the folder with cyclotron:
 
@@ -208,8 +212,9 @@ After saving, publish the folder with cyclotron:
 # Existing dataset: optimistic base check and optional PR
 ./cyclotron.sh --benchmark publish ./my-benchmark <org>/<dataset> --base <commit> --pr
 
-# A Hub working copy (see below) publishes onto the commit it was copied from
-./cyclotron.sh --benchmark publish logs/benchmark_workspaces/humanoid-policy-viewer/<org>__<dataset>-<key> <org>/<dataset>
+# A published benchmark: pull it, edit and commit it, then publish onto the commit it was pulled from
+./cyclotron.sh --benchmark pull datasets/<org>/<dataset>
+./cyclotron.sh --benchmark publish benchmarks/<dataset> <org>/<dataset>
 
 # After a PR is merged, tag its merged revision
 ./cyclotron.sh --benchmark release <org>/<dataset> <merged-commit>
@@ -234,13 +239,14 @@ Before writing remotely, cyclotron:
 5. Uses an optimistic parent commit, removes obsolete benchmark files, and
    tags successful direct version releases. PRs are tagged only after merging.
 
-The parent is the dataset's current main, or `--base` if given. A Hub working
-copy, the folder `--view ... --benchmark datasets/<org>/<dataset>` makes and
-prints, records the commit it was copied from: without `--base`, publishing it
-to the same dataset (and endpoint) uses that commit as the base, so if main has
-moved since, `publish` refuses rather than overwrite those changes. Open the
-current main as a new working folder (`--benchmark datasets/<org>/<dataset>@<commit>`)
-and carry your edits over, or pass `--base <current main>` to publish over them.
+The parent is the dataset's current main, or `--base` if given. A folder made
+by `--benchmark pull` records the commit it was pulled from in
+`.cyclotron-origin.json` (git ignores it), and each direct publication from it
+moves the record to the new commit. Without `--base`, publishing it to the same
+dataset (and endpoint) uses that commit as the base, so if main has moved
+since, `publish` refuses rather than overwrite those changes. Pull the current
+main into a new folder and carry your edits over, or pass
+`--base <current main>` to publish over them.
 
 ### Start poses and their Hub form
 
@@ -300,7 +306,7 @@ license is never deleted as obsolete.
 There is no silent license default. HPV task IDs remain `<task>_v<version>`,
 with the same config mapping and `test` split.
 
-Dry-run makes no remote writes and does not change your working folder. It
+Dry-run makes no remote writes and does not change your benchmark folder. It
 prints generated metadata and publication blockers, and exits with status 1
 when there are blockers (0 when the folder is ready to publish). Generated files, the
 tested commit and Hub-form rows are staged for upload, not written over the
@@ -308,8 +314,7 @@ folder being edited.
 If tagging fails after a successful commit, the error includes a release
 command to retry. Existing tags are never moved.
 
-Dedicated pull/diff/baseline commands are not part of this integration. Hub
-working copies are created when opening a dataset in the viewer, and version
+Dedicated diff/baseline commands are not part of this integration: version
 comparison is built into publication. HPV itself only reads from the Hub; it
 has no publish or submit commands.
 
@@ -339,8 +344,9 @@ Local editing/runs and metadata dry-runs work independently; the Hub may reject
 repo and commit, and recorded under the Hub's own spelling of the repo ID (its
 case, or its new name after a rename), not the one typed. Cached bytes are
 checked against pinned Git/LFS metadata and materialized as real files for the
-viewer, filenames containing `[`, `*` or `?` included. Writable workspaces are separate;
-opening the same Hub reference preserves edits rather than overwriting them.
+viewer, filenames containing `[`, `*` or `?` included. The cache is never edited:
+the viewer opens a Hub benchmark from it read-only, and `--benchmark pull`
+copies one into `benchmarks/` to edit.
 Private repositories use `hf auth login` or `HF_TOKEN`; `HF_ENDPOINT` selects
 the Hub. Local run/view paths do not need Hub authentication. HPV itself runs
 without Hub credentials or access: cyclotron removes `HF_TOKEN`, points

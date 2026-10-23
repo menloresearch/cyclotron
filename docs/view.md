@@ -77,7 +77,7 @@ Options after the policies:
 | `--revision <ref>` | Branch, tag or commit of the first Hub policy given (default: `main`). Other policies use `@<ref>`. |
 | `--port <n>` | Dev server port (default: 3000, or the next free one). |
 | `--no-open` | Do not open a browser window. Added automatically over SSH or without a display. |
-| `--benchmark <folder or datasets/org/name[@rev]>` | Open this benchmark in HPV's existing editor (default: cyclotron's `benchmarks/default`). A local folder is edited in place; a Hub dataset gets a separate writable copy. |
+| `--benchmark <folder or datasets/org/name[@rev]>` | Open this benchmark in HPV's existing editor (default: cyclotron's `benchmarks/default`). A local folder is edited in place; a Hub dataset opens read-only ([pull it](#edit-a-benchmark-in-hpv) to edit). |
 | `--harness <name>` | Select a registered harness (currently `humanoid-policy-viewer`); also configurable through `CYCLOTRON_HARNESS`. |
 
 Run options such as `--jobs`, `--out`, `--watch` or `--verbose` belong to
@@ -104,20 +104,27 @@ and saves directly into that folder. Cyclotron does not replace the editor.
 A test's Environment tab also sets where the robot starts and whether it drops
 and settles first (see [start poses](benchmark.md#start-poses-and-their-hub-form)).
 To start a new benchmark, use the viewer's **New benchmark** UI. New folders
-live under `logs/benchmark_workspaces/humanoid-policy-viewer/` and start as a
-copy of cyclotron's `benchmarks/default/`.
+are saved in `benchmarks/<name>/`, beside cyclotron's `benchmarks/default/`,
+which they start as a copy of. Commit them: until then the untracked folder
+makes the checkout dirty, which blocks publishing and makes runs unsubmittable.
 
 Without `--benchmark`, the viewer opens cyclotron's default suite,
 `benchmarks/default/`, in place: saving in the UI changes tracked files in this
 repository (see [the default benchmark](benchmark.md#the-default-benchmark)).
 
-Opening a Hub benchmark creates a writable copy in
-that workspace directory and prints its path. Reopening the same reference
-preserves edits instead of refreshing over them. Use the printed folder
-path when publishing, or when reopening it without contacting the Hub.
-The pinned download is never edited. A different requested revision gets
-its own working folder. Publishing a working folder checks that the dataset's
-main has not moved since the folder was copied (see
+A Hub benchmark opens read-only, straight from its pinned download in
+cyclotron's cache, and cyclotron prints how to edit it. To edit one, pull it
+into `benchmarks/` first:
+
+```bash
+./cyclotron.sh --benchmark pull datasets/<org>/<dataset>[@<revision>] [<folder>]
+./cyclotron.sh --view <org>/<model> --benchmark benchmarks/<dataset>
+```
+
+`pull` copies the benchmark's files into `benchmarks/<dataset>/` (or the folder
+given), never over an existing folder. It leaves out `eval.yaml`, which
+publishing builds. The copy records the commit it was pulled from, so
+publishing it checks that the dataset's main has not moved since (see
 [publishing](benchmark.md#publish-a-benchmark-folder)).
 
 Publish the saved folder with cyclotron, not the viewer's HF commands:

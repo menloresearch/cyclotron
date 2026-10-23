@@ -5,13 +5,12 @@ import hashlib
 import os
 import re
 import shutil
-import sys
 import tempfile
 from pathlib import Path, PurePosixPath
 from urllib.parse import unquote, urlparse
 
 from ..robot_model import cache_dir
-from .provenance import file_names, read_json, write_json
+from .provenance import file_names, write_json
 
 
 def cache_root():
@@ -162,34 +161,22 @@ def download(reference, select_files, api=None):
             "path": str(destination), "files": files}
 
 
-def working_copy(item, root):
-    """A stable editable copy of a Hub dataset; never refresh over a researcher's edits."""
-    from filelock import FileLock
-
-    root = Path(root)
-    identity = f"{item['endpoint']}|{item['id']}|{item['revision']}"
-    key = hashlib.sha256(identity.encode()).hexdigest()[:12]
-    label = item["id"].replace("/", "__")
-    destination = root / f"{label}-{key}"
-    root.mkdir(parents=True, exist_ok=True)
-    with FileLock(str(destination) + ".lock"):
-        record = destination / ".cyclotron-origin.json"
-        if destination.exists():
-            origin = read_json(record) if record.is_file() else {}
-            if origin.get("identity") != identity:
-                raise ValueError(f"Refusing to overwrite working folder: {destination}")
-            # The folder follows the requested revision, not its commit, so edits survive a new commit there.
-            copied = str(origin.get("origin", {}).get("sha"))
-            if copied != item["sha"]:
-                print(f"Warning: {destination} was copied from {item['id']}@{copied[:12]}, but {item['revision']} "
-                      f"is now {item['sha'][:12]}; move the folder aside to start from the new revision", file=sys.stderr)
-        else:
-            with tempfile.TemporaryDirectory(prefix=".working-", dir=root) as temporary:
-                staged = Path(temporary) / "files"
-                shutil.copytree(item["path"], staged, ignore=shutil.ignore_patterns(".cyclotron-cache.json"))
-                write_json(staged / ".cyclotron-origin.json", {"identity": identity, "origin": item})
-                staged.rename(destination)
-    print(f"Benchmark working folder: {destination} (existing edits are preserved)")
+def editable_copy(item, destination):
+    """A folder to edit and publish from a pinned Hub benchmark; an existing folder is never touched."""
+    destination = Path(destination).expanduser().resolve()
+    if destination.exists():
+        raise ValueError(f"{destination} already exists; give another folder, or move it aside to pull again")
+    source = Path(item["path"])
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix=".pull-", dir=destination.parent) as temporary:
+        staged = Path(temporary) / "files"
+        # The cache's records stay behind (HPV's would make the copy read-only); publication builds eval.yaml again.
+        shutil.copytree(source, staged, ignore=lambda folder, names: [
+            name for name in names if name.startswith(".") or (Path(folder) == source and name == "eval.yaml")])
+        write_json(staged / ".cyclotron-origin.json",
+                   {"origin": {key: item[key] for key in ("id", "endpoint", "revision", "sha")}})
+        staged.rename(destination)
+    print(f"Pulled datasets/{item['id']}@{item['sha'][:12]} into {destination}")
     return destination
 
 

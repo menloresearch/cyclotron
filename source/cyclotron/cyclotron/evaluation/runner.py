@@ -7,7 +7,7 @@ from pathlib import Path
 import yaml
 
 from .harnesses.base import select_harness
-from .hub import local_path, resolve_input, working_copy
+from .hub import editable_copy, is_dataset, local_path, resolve_input
 from .provenance import SCHEMA, file_manifest, git_state, read_json, sha256, write_json
 
 # Cyclotron's own default suite, maintained in this repository rather than read from a harness.
@@ -94,11 +94,24 @@ def view(root, policies, benchmark=None, harness_name=None, revision=None, optio
             folders.extend(str(folder) for folder in exported_runs(word, path))
         else:
             folders.append(str(path))
-    # The pinned Hub cache is never edited; local folders, the default included, are edited in place.
-    directory = dataset["path"]
-    if dataset["source"] == "hub":
-        directory = working_copy(dataset, harness.workspaces)
-    return harness.view(folders, str(directory), options)
+    # Local folders, the default included, are edited in place. A Hub benchmark opens read-only
+    # from the pinned cache; pull copies it into a folder to edit.
+    hub = dataset if dataset["source"] == "hub" else None
+    if hub:
+        reference = f"datasets/{hub['id']}" + (f"@{hub['revision']}" if hub["revision"] != "main" else "")
+        print(f"{reference} ({hub['sha'][:12]}) opens read-only; to edit it: ./cyclotron.sh --benchmark pull {reference}")
+    return harness.view(folders, dataset["path"], options, hub=hub)
+
+
+def pull(root, target, destination=None, harness_name=None):
+    """Copy a Hub benchmark into benchmarks/<name> (or `destination`) to edit, commit and publish."""
+    if not is_dataset(target):
+        raise ValueError(f"pull copies a Hub benchmark: give datasets/<org>/<name>[@revision], not {target}")
+    harness = select_harness(root, harness_name)
+    dataset = resolve_input(target, "dataset", harness.dataset_files)
+    if not (Path(dataset["path"]) / "benchmark.yaml").is_file():
+        raise ValueError(f"datasets/{dataset['id']} is not a benchmark: it has no benchmark.yaml")
+    return editable_copy(dataset, destination or harness.benchmarks / dataset["id"].split("/")[1])
 
 
 def run(root, policies, benchmark=None, harness_name=None, revision=None, output=None, options=()):

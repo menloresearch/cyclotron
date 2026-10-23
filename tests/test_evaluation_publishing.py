@@ -243,16 +243,16 @@ def existing(publication, tmp_path, monkeypatch):
 
 
 def origin(directory, sha, dataset="org/suite", endpoint="https://huggingface.co"):
-    # What hub.working_copy records when it copies a Hub dataset to edit.
-    write_json(directory / ".cyclotron-origin.json", {"identity": f"{endpoint}|{dataset}|main", "origin": {
-        "id": dataset, "repo_type": "dataset", "revision": "main", "source": "hub", "sha": sha, "endpoint": endpoint}})
+    # What hub.editable_copy records when --benchmark pull copies a Hub dataset to edit.
+    write_json(directory / ".cyclotron-origin.json", {"origin": {
+        "id": dataset, "endpoint": endpoint, "revision": "main", "sha": sha}})
 
 
-def test_a_hub_working_copy_publishes_onto_the_commit_it_was_copied_from(existing):
+def test_a_pulled_benchmark_publishes_onto_the_commit_it_matches(existing):
     directory, harness, api, _ = existing
     origin(directory, "b" * 40)
-    # Main moved since the copy was made: publishing it would overwrite those changes.
-    with pytest.raises(ValueError, match=f"main moved since this working copy was made from main \\({'b' * 40}\\).*--base {SHA}"):
+    # Main moved since the folder was pulled: publishing it would overwrite those changes.
+    with pytest.raises(ValueError, match=f"main moved since this folder was pulled from main \\({'b' * 40}\\).*pull datasets/org/suite.*--base {SHA}"):
         publishing.publish(ROOT, directory, "org/suite", dry_run=True, api=api)
     harness.inspect_benchmark.assert_not_called()
     # An explicit --base is the researcher's decision; a copy of another dataset or Hub has no say.
@@ -264,8 +264,14 @@ def test_a_hub_working_copy_publishes_onto_the_commit_it_was_copied_from(existin
     api.create_commit.return_value = SimpleNamespace(pr_url="https://hub/pr/1", commit_url=None, oid="c" * 40)
     publishing.publish(ROOT, directory, "org/suite", pr=True, api=api)
     assert api.create_commit.call_args.kwargs["parent_commit"] == SHA
-    # The origin record is cyclotron's, never uploaded.
+    # The origin record is cyclotron's, never uploaded; a PR leaves main, and so the record, as it was.
     assert ".cyclotron-origin.json" not in {op.path_in_repo for op in api.create_commit.call_args.kwargs["operations"]}
+    assert read_json(directory / ".cyclotron-origin.json")["origin"]["sha"] == SHA
+    # Published directly, the folder is the new main, so its next publication builds on that commit.
+    api.create_commit.return_value = SimpleNamespace(pr_url=None, commit_url="https://hub/commit", oid="c" * 40)
+    publishing.publish(ROOT, directory, "org/suite", api=api)
+    assert read_json(directory / ".cyclotron-origin.json")["origin"] == {
+        "id": "Org/Suite", "endpoint": "https://huggingface.co", "revision": "main", "sha": "c" * 40}
 
 
 def test_an_inherited_license_link_must_be_uploaded(existing):

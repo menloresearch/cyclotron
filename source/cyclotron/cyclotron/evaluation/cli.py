@@ -19,7 +19,7 @@ def parse_run(argv, viewing=False):
         description="View policies, or every exported run in a folder, and edit a benchmark in the harness."
         if viewing else "Run a local or Hugging Face benchmark.",
         epilog="Known --flags and HPV key=value words are accepted. Unknown harness options pass through. "
-               "Benchmark actions: view, submit, publish, release. No uploads occur during a run.",
+               "Benchmark actions: pull, view, submit, publish, release. No uploads occur during a run.",
         allow_abbrev=False,
     )
     parser.add_argument("targets", nargs="*", help="Policy paths/Hub IDs and optionally a benchmark folder or datasets/org/name")
@@ -88,7 +88,7 @@ def main(root, argv=None, viewing=False):
     argv = list(sys.argv[1:] if argv is None else argv)
     if not argv:
         argv = ["--help"]
-    action = None if viewing or argv[0] not in ("view", "submit", "publish", "release") else argv.pop(0)
+    action = None if viewing or argv[0] not in ("pull", "view", "submit", "publish", "release") else argv.pop(0)
     if action:
         parser = argparse.ArgumentParser(description=f"Cyclotron benchmark {action}", allow_abbrev=False)
         if action in ("view", "submit"):
@@ -109,6 +109,10 @@ def main(root, argv=None, viewing=False):
         if action == "release":
             parser.add_argument("dataset")
             parser.add_argument("revision")
+        if action == "pull":
+            parser.add_argument("dataset")
+            parser.add_argument("directory", nargs="?")
+            parser.add_argument("--harness")
         args = parser.parse_args(argv)
         if action == "view":
             from .harnesses.base import select_harness
@@ -125,6 +129,10 @@ def main(root, argv=None, viewing=False):
             from .eval_results import submit
 
             return submit(root, args.result, args.pr, args.dry_run)
+        if action == "pull":
+            from .runner import pull
+
+            return pull(root, args.dataset, args.directory, args.harness)
         from .publishing import publish, release
 
         if action == "publish":
