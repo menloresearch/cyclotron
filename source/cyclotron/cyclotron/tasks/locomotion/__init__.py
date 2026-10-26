@@ -49,3 +49,16 @@ gym.register(
         "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:Asimov1AMPRunnerCfg",
     },
 )
+
+for task_suffix, cfg_suffix in (("", ""), ("-Play", "_PLAY")):
+    gym.register(
+        id=f"Asimov1-Velocity-LowerBody-27Dof-AMP{task_suffix}-v0",
+        entry_point="isaaclab.envs:ManagerBasedRLEnv",
+        disable_env_checker=True,
+        kwargs={
+            "env_cfg_entry_point": (
+                f"{__name__}.lower_body_27dof_amp_env_cfg:Asimov1LowerBody27DofAmpEnvCfg{cfg_suffix}"
+            ),
+            "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:Asimov1LowerBody27DofAMPRunnerCfg",
+        },
+    )

@@ -18,6 +18,7 @@ from ..amp_env_cfg import (
     ASIMOV_1_KEY_BODY_NAMES,
     ASIMOV_1_MOTION_FILES,
 )
+from ..lower_body_27dof_amp_env_cfg import ASIMOV_1_LOWER_BODY_JOINT_NAMES
 from ..motion_dataset import MotionDatasetCfg
 
 
@@ -131,3 +132,16 @@ class Asimov1AMPRunnerCfg(Asimov1PPORunnerCfg):
         amp_reward_command_name="twist",
         amp_reward_command_threshold=0.1,
     )
+
+
+@configclass
+class Asimov1LowerBody27DofAMPRunnerCfg(Asimov1AMPRunnerCfg):
+    """Use the shared AMP motion reference with leg-only discriminator features."""
+
+    experiment_name = "asimov_velocity_lower_body_27dof_amp"
+    run_name = "lower_body_27dof_amp"
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.algorithm.amp_data.joint_names = list(ASIMOV_1_LOWER_BODY_JOINT_NAMES)
+        self.algorithm.amp_data.body_names = ["left_ankle_roll_link", "right_ankle_roll_link"]

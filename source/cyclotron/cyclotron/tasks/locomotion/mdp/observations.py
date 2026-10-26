@@ -71,18 +71,35 @@ def foot_contact_forces(env: ManagerBasedRLEnv, sensor_name: str) -> torch.Tenso
     return sensor.data.net_forces_w.reshape(env.num_envs, -1)
 
 
+def body_ang_vel_b(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg) -> torch.Tensor:
+    """Angular velocity of one body in its own frame, as a gyro mounted on it reads."""
+    asset: Articulation = env.scene[asset_cfg.name]
+    quat = asset.data.body_link_quat_w[:, asset_cfg.body_ids].squeeze(1)
+    ang_vel = asset.data.body_link_ang_vel_w[:, asset_cfg.body_ids].squeeze(1)
+    return math_utils.quat_apply_inverse(quat, ang_vel)
+
+
+def body_projected_gravity_b(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg) -> torch.Tensor:
+    """Gravity direction in one body's frame, as an IMU mounted on it estimates."""
+    asset: Articulation = env.scene[asset_cfg.name]
+    quat = asset.data.body_link_quat_w[:, asset_cfg.body_ids].squeeze(1)
+    return math_utils.quat_apply_inverse(quat, asset.data.GRAVITY_VEC_W)
+
+
 class delayed_obs(ManagerTermBase):
+    """A delayed IMU reading. Without ``asset_cfg`` it reads the root body;
+    with one, the single body named there (where the IMU is mounted)."""
 
     _QUANTITIES = {
-        "base_ang_vel": base_mdp.base_ang_vel,
-        "projected_gravity": base_mdp.projected_gravity,
+        "base_ang_vel": (base_mdp.base_ang_vel, body_ang_vel_b),
+        "projected_gravity": (base_mdp.projected_gravity, body_projected_gravity_b),
     }
 
     def __init__(self, cfg: ObservationTermCfg, env: ManagerBasedRLEnv):
         super().__init__(cfg, env)
         self._min_lag = int(cfg.params["min_lag"])
         self._max_lag = int(cfg.params["max_lag"])
-        self._fn = self._QUANTITIES[cfg.params["quantity"]]
+        self._root_fn, self._body_fn = self._QUANTITIES[cfg.params["quantity"]]
         self._lags = torch.randint(
             self._min_lag, self._max_lag + 1, (env.num_envs,), device=env.device
         )
@@ -98,9 +115,14 @@ class delayed_obs(ManagerTermBase):
         self._pending_reset = env_ids
 
     def __call__(
-        self, env: ManagerBasedRLEnv, quantity: str, min_lag: int, max_lag: int
+        self,
+        env: ManagerBasedRLEnv,
+        quantity: str,
+        min_lag: int,
+        max_lag: int,
+        asset_cfg: SceneEntityCfg | None = None,
     ) -> torch.Tensor:
-        value = self._fn(env)
+        value = self._root_fn(env) if asset_cfg is None else self._body_fn(env, asset_cfg)
         if self._buffer is None:
             self._buffer = value.unsqueeze(1).repeat(1, self._max_lag + 1, 1)
         else:
