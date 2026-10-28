@@ -70,6 +70,35 @@ unless a visualizer is requested with `--viz` (for example `--viz kit` to watch
 training); `--headless` is kept, so commands written for earlier versions run
 unchanged.
 
+### Physics engine
+
+Runs use PhysX unless `physics=newton_mjwarp` asks for MuJoCo Warp, run
+through Isaac Lab's Newton backend:
+
+```bash
+./cyclotron.sh --train --task Asimov1-Velocity-AMP-v0 --num_envs 4096 --headless \
+    physics=newton_mjwarp
+```
+
+Everything else — tasks, rewards, AMP, `--play`, `--export` — works the same
+way, and a training iteration takes about half as long. The run's `env.yaml`
+records the engine under `sim.physics.class_type`.
+
+The two engines don't treat every setting alike, so a policy trained on one
+isn't the same policy as one trained on the other:
+
+- **Joint friction.** The actuators' `friction` (0.2–0.7 N·m) is a static
+  friction in PhysX: it holds a joint still, but nothing opposes a moving
+  joint, since no dynamic friction is set. MuJoCo applies the same amount
+  as a dry friction loss while the joint moves too.
+- **Contacts.** MuJoCo's contacts are soft (Isaac Lab's velocity-task
+  settings: `ke=160000`, `kd=1100`), PhysX's are rigid.
+- **Foot friction randomization.** MuJoCo has one friction coefficient per
+  contact, so `foot_friction` randomizes the static coefficient only.
+
+Isaac Sim still starts on Newton runs: its URDF importer builds the robot.
+It doesn't slow down the physics steps.
+
 ### Hydra overrides
 
 Unknown arguments pass through to Hydra, so any value in the task's env or

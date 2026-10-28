@@ -202,8 +202,8 @@ HF_TOKEN=hf_... ./cyclotron.sh --view <org>/<private-model>
 
 ### Sim2sim sanity check
 
-[`--play`](play.md) runs the checkpoint in Isaac Sim (PhysX); `--view` runs
-the exported ONNX in MuJoCo. Running both on the same run is a quick sim2sim
+[`--play`](play.md) runs the checkpoint in Isaac Sim (PhysX, or MuJoCo Warp with
+`physics=newton_mjwarp`); `--view` runs the exported ONNX in MuJoCo. Running both on the same run is a quick sim2sim
 check: a policy that walks in one and stumbles in the other has overfit its
 training physics.
 
