@@ -27,8 +27,8 @@ def foot_pos_w(
     offset: tuple[float, float, float] = FOOT_SITE_OFFSET,
 ) -> torch.Tensor:
     asset: Articulation = env.scene[asset_cfg.name]
-    pos = asset.data.body_link_pos_w[:, asset_cfg.body_ids]
-    quat = asset.data.body_link_quat_w[:, asset_cfg.body_ids]
+    pos = asset.data.body_link_pos_w.torch[:, asset_cfg.body_ids]
+    quat = asset.data.body_link_quat_w.torch[:, asset_cfg.body_ids]
     off = torch.tensor(offset, device=env.device).expand(pos.shape[0], pos.shape[1], 3)
     return pos + math_utils.quat_apply(quat, off)
 
@@ -39,9 +39,9 @@ def foot_vel_w(
     offset: tuple[float, float, float] = FOOT_SITE_OFFSET,
 ) -> torch.Tensor:
     asset: Articulation = env.scene[asset_cfg.name]
-    quat = asset.data.body_link_quat_w[:, asset_cfg.body_ids]
-    lin_vel = asset.data.body_link_lin_vel_w[:, asset_cfg.body_ids]
-    ang_vel = asset.data.body_link_ang_vel_w[:, asset_cfg.body_ids]
+    quat = asset.data.body_link_quat_w.torch[:, asset_cfg.body_ids]
+    lin_vel = asset.data.body_link_lin_vel_w.torch[:, asset_cfg.body_ids]
+    ang_vel = asset.data.body_link_ang_vel_w.torch[:, asset_cfg.body_ids]
     off = torch.tensor(offset, device=env.device).expand(quat.shape[0], quat.shape[1], 3)
     r = math_utils.quat_apply(quat, off)
     return lin_vel + torch.cross(ang_vel, r, dim=-1)
@@ -56,19 +56,19 @@ def foot_height(
 
 def foot_air_time(env: ManagerBasedRLEnv, sensor_name: str) -> torch.Tensor:
     sensor: ContactSensor = env.scene.sensors[sensor_name]
-    return sensor.data.current_air_time
+    return sensor.data.current_air_time.torch
 
 
 def foot_contact(
     env: ManagerBasedRLEnv, sensor_name: str, force_threshold: float = 1.0
 ) -> torch.Tensor:
     sensor: ContactSensor = env.scene.sensors[sensor_name]
-    return (sensor.data.net_forces_w.norm(dim=-1) > force_threshold).float()
+    return (sensor.data.net_normal_forces_w.torch.norm(dim=-1) > force_threshold).float()
 
 
 def foot_contact_forces(env: ManagerBasedRLEnv, sensor_name: str) -> torch.Tensor:
     sensor: ContactSensor = env.scene.sensors[sensor_name]
-    return sensor.data.net_forces_w.reshape(env.num_envs, -1)
+    return sensor.data.net_normal_forces_w.torch.reshape(env.num_envs, -1)
 
 
 class delayed_obs(ManagerTermBase):
@@ -90,8 +90,8 @@ class delayed_obs(ManagerTermBase):
         self._pending_reset: torch.Tensor | None = None
 
     def reset(self, env_ids: torch.Tensor | None = None):
-        if env_ids is None:
-            env_ids = torch.arange(self._env.num_envs, device=self._env.device)
+        # None or a slice when every environment is reset.
+        env_ids = torch.arange(self._env.num_envs, device=self._env.device)[slice(None) if env_ids is None else env_ids]
         self._lags[env_ids] = torch.randint(
             self._min_lag, self._max_lag + 1, (len(env_ids),), device=self._env.device
         )

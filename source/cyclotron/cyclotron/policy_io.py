@@ -12,6 +12,7 @@ Isaac Lab is only imported inside ``resolve_policy_io``, so the comparison runs 
 from __future__ import annotations
 
 import math
+import re
 
 # The per-joint action values compared by joint name, in the order they are reported (then the clip).
 _ACTION_VALUES = ("scale", "offset", "stiffness", "damping")
@@ -46,6 +47,34 @@ def _configured_offset(term) -> list[float]:
     return [pose[int(i)] for i in joint_ids]
 
 
+def _configured_gains(asset) -> dict[str, tuple[float, float]]:
+    """Each joint's stiffness and damping as its actuator config sets them, by joint name.
+
+    Not the simulated gains, which reset randomization events perturb, and which Isaac Lab 3.0 reports as zero for
+    joints an explicit actuator model drives. A gain the config leaves unset (the robot model's own) is read from the
+    simulation.
+    """
+    gains = {}
+    for actuator in asset.cfg.actuators.values():
+        # Isaac Lab matches each pattern against the whole joint name.
+        names = [name for name in asset.joint_names if any(re.fullmatch(e, name) for e in actuator.joint_names_expr)]
+        per_gain = []
+        for gain in ("stiffness", "damping"):
+            value = getattr(actuator, gain)
+            if isinstance(value, dict):
+                per_gain.append(
+                    {name: v for pattern, v in value.items() for name in names if re.fullmatch(pattern, name)}
+                )
+            elif value is not None:
+                per_gain.append(dict.fromkeys(names, value))
+            else:
+                simulated = getattr(asset.data, f"joint_{gain}").torch[0]
+                per_gain.append({name: simulated[asset.joint_names.index(name)] for name in names})
+        for name in names:
+            gains[name] = (float(per_gain[0][name]), float(per_gain[1][name]))
+    return gains
+
+
 def _joint_position_action():
     from isaaclab.envs.mdp.actions import JointPositionAction
 
@@ -69,9 +98,9 @@ def _resolve_actions(env) -> tuple[dict | None, str | None]:
         joint_names += names
         scale += _per_joint(term._scale, len(names))
         offset += _configured_offset(term)
-        # The configured gains, not the simulated ones, which startup randomization events can perturb.
-        stiffness += [float(v) for v in term._asset.data.default_joint_stiffness[0, term._joint_ids]]
-        damping += [float(v) for v in term._asset.data.default_joint_damping[0, term._joint_ids]]
+        gains = _configured_gains(term._asset)
+        stiffness += [gains[name][0] for name in names]
+        damping += [gains[name][1] for name in names]
         if term.cfg.clip is None:
             clip += [[None, None]] * len(names)
         else:
@@ -85,7 +114,8 @@ def _resolve_actions(env) -> tuple[dict | None, str | None]:
 def _selected(ids, names, everything: list[str]) -> list[str] | None:
     """The names an entity config's resolved ``ids`` select (a slice is all of them, in the asset's order), or None
     when it selects none of this kind."""
-    if names is None and ids == slice(None):
+    # Resolved ids are a slice or, once the manager has finalized them, a device tensor.
+    if names is None and isinstance(ids, slice) and ids == slice(None):
         return None
     return list(everything[ids]) if isinstance(ids, slice) else [everything[int(i)] for i in ids]
 

@@ -13,6 +13,7 @@ from rsl_rl.algorithms import PPO
 from rsl_rl.env import VecEnv
 from rsl_rl.storage import RolloutStorage
 from rsl_rl.utils import resolve_callable
+from rsl_rl.utils.utils import reduce_gradients_in_buckets
 from tensordict import TensorDict
 
 from .discriminator import AMPDiscriminator
@@ -48,9 +49,9 @@ class AMPPPO(PPO):
         amp_min_normalized_std: float | None = 0.0,
         **kwargs,
     ) -> None:
-        if amp_observation_dim is None or amp_data is None:
+        if amp_observation_dim is None:
             raise ValueError(
-                "AMPPPO requires an AMP observation dimension and motion dataset. Both are"
+                "AMPPPO requires an AMP observation dimension. It and the motion dataset are"
                 " prepared by AMPPPO.construct_algorithm; instantiate through the runner."
             )
         super().__init__(actor, critic, storage, **kwargs)
@@ -117,10 +118,11 @@ class AMPPPO(PPO):
             )
 
         alg_cfg["amp_observation_dim"] = amp_obs_dim
-        alg_cfg["amp_data"] = amp_data
-        alg_cfg["command_manager"] = getattr(env.unwrapped, "command_manager", None)
-
-        return PPO.construct_algorithm(obs, env, cfg, device)
+        alg = PPO.construct_algorithm(obs, env, cfg, device)
+        # Attached after construction: rsl_rl deep-copies the algorithm config, and these hold the live simulation.
+        alg.amp_data = amp_data
+        alg.command_manager = getattr(env.unwrapped, "command_manager", None)
+        return alg
 
     def process_env_step(
         self, obs: TensorDict, rewards: torch.Tensor, dones: torch.Tensor, extras: dict[str, torch.Tensor]
@@ -184,90 +186,65 @@ class AMPPPO(PPO):
                 with torch.no_grad():
                     batch.advantages = (batch.advantages - batch.advantages.mean()) / (batch.advantages.std() + 1e-8)
 
-            if self.symmetry and self.symmetry["use_data_augmentation"]:
-                data_augmentation_func = self.symmetry["data_augmentation_func"]
-                batch.observations, batch.actions = data_augmentation_func(
-                    env=self.symmetry["_env"], obs=batch.observations, actions=batch.actions
-                )
-                num_aug = int(batch.observations.batch_size[0] / original_batch_size)
-                batch.old_actions_log_prob = batch.old_actions_log_prob.repeat(num_aug, 1)
-                batch.values = batch.values.repeat(num_aug, 1)
-                batch.advantages = batch.advantages.repeat(num_aug, 1)
-                batch.returns = batch.returns.repeat(num_aug, 1)
-
-            self.actor(
-                batch.observations,
-                masks=batch.masks,
-                hidden_state=batch.hidden_states[0],
-                stochastic_output=True,
-            )
-            actions_log_prob = self.actor.get_output_log_prob(batch.actions)
-            values = self.critic(batch.observations, masks=batch.masks, hidden_state=batch.hidden_states[1])
-            distribution_params = tuple(p[:original_batch_size] for p in self.actor.output_distribution_params)
-            entropy = self.actor.output_entropy[:original_batch_size]
-
-            if self.desired_kl is not None and self.schedule == "adaptive":
-                with torch.inference_mode():
-                    kl = self.actor.get_kl_divergence(batch.old_distribution_params, distribution_params)
-                    kl_mean = torch.mean(kl)
-                    if self.is_multi_gpu:
-                        torch.distributed.all_reduce(kl_mean, op=torch.distributed.ReduceOp.SUM)
-                        kl_mean /= self.gpu_world_size
-                    if self.gpu_global_rank == 0:
-                        if kl_mean > self.desired_kl * 2.0:
-                            self.learning_rate = max(1e-5, self.learning_rate / 1.5)
-                        elif kl_mean < self.desired_kl / 2.0 and kl_mean > 0.0:
-                            self.learning_rate = min(1e-2, self.learning_rate * 1.5)
-                    if self.is_multi_gpu:
-                        lr_tensor = torch.tensor(self.learning_rate, device=self.device)
-                        torch.distributed.broadcast(lr_tensor, src=0)
-                        self.learning_rate = lr_tensor.item()
-                    for param_group in self.optimizer.param_groups:
-                        param_group["lr"] = self.learning_rate
-
-            ratio = torch.exp(actions_log_prob - torch.squeeze(batch.old_actions_log_prob))
-            surrogate = -torch.squeeze(batch.advantages) * ratio
-            surrogate_clipped = -torch.squeeze(batch.advantages) * torch.clamp(
-                ratio, 1.0 - self.clip_param, 1.0 + self.clip_param
-            )
-            surrogate_loss = torch.max(surrogate, surrogate_clipped).mean()
-
-            if self.use_clipped_value_loss:
-                value_clipped = batch.values + (values - batch.values).clamp(-self.clip_param, self.clip_param)
-                value_losses = (values - batch.returns).pow(2)
-                value_losses_clipped = (value_clipped - batch.returns).pow(2)
-                value_loss = torch.max(value_losses, value_losses_clipped).mean()
-            else:
-                value_loss = (batch.returns - values).pow(2).mean()
-
-            loss = surrogate_loss + self.value_loss_coef * value_loss - self.entropy_coef * entropy.mean()
-
             if self.symmetry:
-                if not self.symmetry["use_data_augmentation"]:
-                    data_augmentation_func = self.symmetry["data_augmentation_func"]
-                    batch.observations, _ = data_augmentation_func(
-                        obs=batch.observations, actions=None, env=self.symmetry["_env"]
-                    )
-                mean_actions = self.actor(batch.observations.detach().clone())
-                action_mean_orig = mean_actions[:original_batch_size]
-                _, actions_mean_symm = data_augmentation_func(
-                    obs=None, actions=action_mean_orig, env=self.symmetry["_env"]
-                )
-                symmetry_loss = nn.functional.mse_loss(
-                    mean_actions[original_batch_size:], actions_mean_symm.detach()[original_batch_size:]
-                )
-                if self.symmetry["use_mirror_loss"]:
-                    loss += self.symmetry["mirror_loss_coeff"] * symmetry_loss
-                else:
-                    symmetry_loss = symmetry_loss.detach()
+                self.symmetry.augment_batch(batch, original_batch_size)
 
-            if self.rnd:
-                with torch.no_grad():
-                    rnd_state = self.rnd.get_rnd_state(batch.observations[:original_batch_size])
-                    rnd_state = self.rnd.state_normalizer(rnd_state)
-                predicted_embedding = self.rnd.predictor(rnd_state)
-                target_embedding = self.rnd.target(rnd_state).detach()
-                rnd_loss = nn.functional.mse_loss(predicted_embedding, target_embedding)
+            with torch.amp.autocast(
+                device_type=torch.device(self.device).type, enabled=self.use_mixed_precision, dtype=torch.bfloat16
+            ):
+                self.actor(
+                    batch.observations,
+                    masks=batch.masks,
+                    hidden_state=batch.hidden_states[0],
+                    stochastic_output=True,
+                )
+                actions_log_prob = self.actor.get_output_log_prob(batch.actions)
+                values = self.critic(batch.observations, masks=batch.masks, hidden_state=batch.hidden_states[1])
+                distribution_params = tuple(p[:original_batch_size] for p in self.actor.output_distribution_params)
+                entropy = self.actor.output_entropy[:original_batch_size]
+
+                if self.desired_kl is not None and self.schedule == "adaptive":
+                    with torch.inference_mode():
+                        kl = self.actor.get_kl_divergence(batch.old_distribution_params, distribution_params)
+                        kl_mean = torch.mean(kl)
+                        if self.is_multi_gpu:
+                            torch.distributed.all_reduce(kl_mean, op=torch.distributed.ReduceOp.SUM)
+                            kl_mean /= self.gpu_world_size
+                        if self.gpu_global_rank == 0:
+                            if kl_mean > self.desired_kl * 2.0:
+                                self.learning_rate = max(1e-5, self.learning_rate / 1.5)
+                            elif kl_mean < self.desired_kl / 2.0 and kl_mean > 0.0:
+                                self.learning_rate = min(1e-2, self.learning_rate * 1.5)
+                        if self.is_multi_gpu:
+                            lr_tensor = torch.tensor(self.learning_rate, device=self.device)
+                            torch.distributed.broadcast(lr_tensor, src=0)
+                            self.learning_rate = lr_tensor.item()
+                        for param_group in self.optimizer.param_groups:
+                            param_group["lr"] = self.learning_rate
+
+                ratio = torch.exp(actions_log_prob - torch.squeeze(batch.old_actions_log_prob))
+                surrogate = -torch.squeeze(batch.advantages) * ratio
+                surrogate_clipped = -torch.squeeze(batch.advantages) * torch.clamp(
+                    ratio, 1.0 - self.clip_param, 1.0 + self.clip_param
+                )
+                surrogate_loss = torch.max(surrogate, surrogate_clipped).mean()
+
+                if self.use_clipped_value_loss:
+                    value_clipped = batch.values + (values - batch.values).clamp(-self.clip_param, self.clip_param)
+                    value_losses = (values - batch.returns).pow(2)
+                    value_losses_clipped = (value_clipped - batch.returns).pow(2)
+                    value_loss = torch.max(value_losses, value_losses_clipped).mean()
+                else:
+                    value_loss = (batch.returns - values).pow(2).mean()
+
+                loss = surrogate_loss + self.value_loss_coef * value_loss - self.entropy_coef * entropy.mean()
+
+                rnd_loss = self.rnd.compute_loss(batch.observations[:original_batch_size]) if self.rnd else None
+
+                if self.symmetry:
+                    symmetry_loss = self.symmetry.compute_loss(self.actor, batch, original_batch_size)
+                    if self.symmetry.use_mirror_loss:
+                        loss = loss + self.symmetry.mirror_loss_coeff * symmetry_loss
 
             if train_amp:
                 policy_state, policy_next_state = next(policy_generator)
@@ -293,15 +270,15 @@ class AMPPPO(PPO):
             self.optimizer.zero_grad()
             loss.backward()
             if self.rnd:
-                self.rnd_optimizer.zero_grad()
+                self.rnd.optimizer.zero_grad()
                 rnd_loss.backward()
             if self.is_multi_gpu:
                 self.reduce_parameters()
             self._clip_actor_critic_gradients()
             self.optimizer.step()
             self._clamp_action_std()
-            if self.rnd_optimizer:
-                self.rnd_optimizer.step()
+            if self.rnd:
+                self.rnd.optimizer.step()
 
             if train_amp:
                 self.discriminator.update_normalization(policy_state, expert_state)
@@ -321,6 +298,13 @@ class AMPPPO(PPO):
 
         if train_amp and self.is_multi_gpu:
             self._sync_discriminator_normalizer()
+
+        # rsl_rl updates the policy's observation normalizers once per update, from the whole rollout.
+        obs = self.storage.observations.flatten(0, 1)
+        self.actor.update_normalization(obs)
+        self.critic.update_normalization(obs)
+        if self.rnd:
+            self.rnd.update_normalization(obs)
 
         self.storage.clear()
         loss_dict = {
@@ -385,7 +369,7 @@ class AMPPPO(PPO):
     def _clamp_action_std(self) -> None:
         if self.amp_min_normalized_std is None:
             return
-        distribution = getattr(self.actor, "distribution", None)
+        distribution = getattr(self._raw_actor, "distribution", None)
         std_param = getattr(distribution, "std_param", None)
         if std_param is not None:
             std_param.data.clamp_(min=self.amp_min_normalized_std)
@@ -403,28 +387,17 @@ class AMPPPO(PPO):
             torch.distributed.broadcast(tensor, src=0)
 
     def reduce_parameters(self) -> None:
-        params = list(self.actor.parameters())
-        params.extend(self.critic.parameters())
-        params.extend(self.discriminator.parameters())
+        params = chain(self.actor.parameters(), self.critic.parameters(), self.discriminator.parameters())
         if self.rnd:
-            params.extend(self.rnd.parameters())
-        grads = [param.grad.view(-1) for param in params if param.grad is not None]
-        all_grads = torch.cat(grads)
-        torch.distributed.all_reduce(all_grads, op=torch.distributed.ReduceOp.SUM)
-        all_grads /= self.gpu_world_size
-        offset = 0
-        for param in params:
-            if param.grad is None:
-                continue
-            numel = param.numel()
-            param.grad.data.copy_(all_grads[offset : offset + numel].view_as(param.grad.data))
-            offset += numel
+            params = chain(params, self.rnd.parameters())
+        reduce_gradients_in_buckets(params, self.gpu_world_size, self.grad_reduce_bucket_mb)
 
     def broadcast_parameters(self) -> None:
-        self._broadcast_module_state(self.actor)
-        self._broadcast_module_state(self.critic)
+        self._broadcast_module_state(self._raw_actor)
+        self._broadcast_module_state(self._raw_critic)
         if self.rnd:
             self._broadcast_module_state(self.rnd.predictor)
+            self._broadcast_module_state(self.rnd.target)
         self._broadcast_module_state(self.discriminator)
 
     def train_mode(self) -> None:

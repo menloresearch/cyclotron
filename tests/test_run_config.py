@@ -316,6 +316,43 @@ def test_renamed_modules_and_new_unset_fields_are_not_changes():
     assert differences(env) == ([], [])
 
 
+def test_a_run_saved_before_isaac_lab_3_rebuilds_as_it_was_trained(tmp_path):
+    """make_env() is saved as Isaac Lab 2.x wrote it: actuator limits under their old names, and none of the settings
+    Isaac Lab 3.0 and rsl_rl 5.5 added."""
+    params = tmp_path / "params"
+    params.mkdir()
+    (params / "env.yaml").write_text(dump(make_env()))
+    (params / "agent.yaml").write_text(dump(make_agent()))
+    env, agent = make_env(), make_agent()
+    hip_pitch = env["scene"]["robot"]["actuators"]["hip_pitch"]
+    hip_pitch.update(effort_limit=None, actuator_effort_limit=45.0)
+    env["observations"]["policy"]["history_order"] = "term"
+    env["observations"]["policy"]["base_ang_vel"].update(delay_min_lag=0, delay_max_lag=0, delay_hold_prob=1.0)
+    agent["actor"]["distribution_cfg"]["std_range"] = (1.0e-6, 1.0e6)
+    assert rebuild_differences(load_run_configs(str(tmp_path)), env, agent) == ([], [])
+
+    hip_pitch["actuator_effort_limit"] = 30.0
+    env["observations"]["policy"]["base_ang_vel"]["delay_max_lag"] = 2
+    assert rebuild_differences(load_run_configs(str(tmp_path)), env, agent) == (
+        ["env.scene.robot.actuators.hip_pitch.actuator_effort_limit: 45.0 -> 30.0"],
+        ["env.observations.policy.base_ang_vel.delay_max_lag: none -> 2"],
+    )
+
+
+def test_restore_sets_a_renamed_actuator_setting_under_its_new_name():
+    @dataclass
+    class ActuatorCfg:
+        joint_names_expr: list = field(default_factory=list)
+        actuator_effort_limit: float | None = None
+        effort_limit: float | None = None
+
+    env = SimpleNamespace(scene=SimpleNamespace(robot=SimpleNamespace(actuators={"hip_pitch": ActuatorCfg()})))
+    saved = {"scene": {"robot": {"actuators": {"hip_pitch": {"joint_names_expr": [".*"], "effort_limit": 45.0}}}}}
+    assert restore_policy_settings(env, SimpleNamespace(), saved, {}) == []
+    hip_pitch = env.scene.robot.actuators["hip_pitch"]
+    assert (hip_pitch.actuator_effort_limit, hip_pitch.effort_limit) == (45.0, None)
+
+
 def test_rebuild_differences_flags_values_unlike_the_run_and_lists_settings_it_did_not_save(tmp_path):
     params = tmp_path / "params"
     params.mkdir()

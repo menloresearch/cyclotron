@@ -24,11 +24,13 @@ class FakeJointPositionAction:
         self.cfg = SimpleNamespace(use_default_offset=False, clip=clip)
         if clip is not None:
             self._clip = torch.tensor([clip])
-        data = SimpleNamespace(
-            default_joint_stiffness=torch.tensor([[150.0, 150.0, 200.0, 200.0]]),
-            default_joint_damping=torch.tensor([[5.0, 5.0, 8.0, 8.0]]),
-        )
-        self._asset = SimpleNamespace(data=data)
+        # Isaac Lab 3.0 reports the joints of explicit actuators with zero solver gains; the configured ones count.
+        data = SimpleNamespace(joint_stiffness=torch.zeros(1, 4), joint_damping=torch.zeros(1, 4))
+        actuators = {
+            "hips": SimpleNamespace(joint_names_expr=[".*_hip"], stiffness=150.0, damping=5.0),
+            "knees": SimpleNamespace(joint_names_expr=[".*_knee"], stiffness={".*": 200.0}, damping=8.0),
+        }
+        self._asset = SimpleNamespace(data=data, joint_names=ROBOT_JOINTS, cfg=SimpleNamespace(actuators=actuators))
 
 
 class OtherAction:
