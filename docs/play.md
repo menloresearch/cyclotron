@@ -82,8 +82,10 @@ Playback:
 | `--disable_fabric` | Disable fabric and use USD I/O operations. |
 | `--agent <entry point>` | RL agent configuration entry point. Default: `rsl_rl_cfg_entry_point`. |
 
-Isaac Sim's AppLauncher flags also apply, most usefully `--headless` (no
-viewer window; combine with `--video`) and `--device` (e.g. `cuda:1`). The
+Isaac Lab's launcher flags also apply, most usefully `--headless` (no
+viewer window; combine with `--video`), `--viz` (the viewer: `kit`, the Isaac
+Sim viewport `--play` opens by default, or `newton_gl`, `rerun` or `viser`) and
+`--device` (e.g. `cuda:1`). The
 remaining RSL-RL flags (`--run_name`, `--resume`, `--logger`,
 `--log_project_name`) are accepted for config compatibility but matter for
 `--train`, not here.

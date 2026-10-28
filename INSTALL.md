@@ -9,6 +9,7 @@ below; both end with the same "Install this extension" step.
 - [Using your own Isaac Lab checkout](#using-your-own-isaac-lab-checkout)
 - [Install with uv](#install-with-uv)
 - [Install with conda and pip](#install-with-conda-and-pip)
+- [First launch](#first-launch)
 - [Robot model](#robot-model)
 - [Install this extension](#install-this-extension)
 
@@ -18,16 +19,17 @@ If you already have Isaac Lab cloned somewhere, skip the
 `git submodule update --init third_party/IsaacLab` step in whichever
 approach you follow below, and substitute your own path wherever
 `third_party/IsaacLab` appears (for example,
-`(cd /path/to/your/IsaacLab && ./isaaclab.sh --install rsl_rl)`). Everything
+`(cd /path/to/your/IsaacLab && ./isaaclab.sh -i 'rl[rsl-rl]')`). Everything
 else — the environment setup, the robot model, and installing this
-extension — stays the same. This project pins RSL-RL 5.0.1 and expects
-Isaac Lab `main` (currently reporting 2.3.2, with RSL-RL 5 support); other
-versions may not be compatible.
+extension — stays the same. This project pins RSL-RL 5.5.1 and expects
+Isaac Lab 3.0.0 with Isaac Sim 6.2 and Python 3.12; other versions may not be
+compatible.
 
 ### Install with uv
 
 These steps target Ubuntu 22.04+ (x86_64), with
-[uv](https://docs.astral.sh/uv/) and a compatible NVIDIA driver installed.
+[uv](https://docs.astral.sh/uv/) and an NVIDIA driver 580.65 or newer (CUDA 13)
+installed. Isaac Sim and its dependencies take about 26 GB.
 
 1. Install build tools needed to compile some Isaac Lab dependencies, and
    `libglu1-mesa`, which Isaac Sim's `omni.iray` extension needs at runtime:
@@ -43,38 +45,40 @@ These steps target Ubuntu 22.04+ (x86_64), with
    git submodule update --init third_party/IsaacLab
    ```
 
-3. Create a Python 3.11 virtual environment and activate it. `--seed`
+3. Create a Python 3.12 virtual environment and activate it. `--seed`
    installs `pip` into the venv, since Isaac Lab's own installer shells out
    to it:
 
    ```bash
-   uv venv --seed --python 3.11
+   uv venv --seed --python 3.12
    source .venv/bin/activate
    ```
 
 4. Install Isaac Sim and CUDA-enabled PyTorch into the active environment:
 
    ```bash
-   uv pip install "isaacsim[all,extscache]==5.1.0" --extra-index-url https://pypi.nvidia.com
-   uv pip install torch==2.7.0 torchvision==0.22.0 --index-url https://download.pytorch.org/whl/cu128
+   uv pip install "isaacsim[all,extscache]==6.2.0.0" --extra-index-url https://pypi.nvidia.com \
+       --index-strategy unsafe-best-match --prerelease=allow
+   uv pip install torch==2.11.0 torchvision==0.26.0 --index-url https://download.pytorch.org/whl/cu130
    ```
 
-5. Install Isaac Lab's RSL-RL extras. This installs `isaaclab`,
-   `isaaclab_rl`, and `isaaclab_tasks` in editable mode from the checkout,
-   plus `rsl-rl-lib`:
+5. Install Isaac Lab with its RSL-RL extras in editable mode from the
+   checkout, plus `rsl-rl-lib`, and MoviePy for `--video`:
 
    ```bash
-   (cd third_party/IsaacLab && ./isaaclab.sh --install rsl_rl)
+   (cd third_party/IsaacLab && ./isaaclab.sh -i 'rl[rsl-rl]')
+   # --video records with MoviePy, which Isaac Lab doesn't install by default.
+   uv pip install "moviepy>=1.0.3,<2.0.0.dev0"
    ```
 
 See the
-[official installation guide](https://isaac-sim.github.io/IsaacLab/main/source/setup/installation/pip_installation.html)
+[official installation guide](https://isaac-sim.github.io/IsaacLab/main/source/isaaclab/installation.html)
 for prerequisites and troubleshooting.
 
 ### Install with conda and pip
 
-These steps target Ubuntu 22.04+ (x86_64), with Conda and a compatible
-NVIDIA driver installed.
+These steps target Ubuntu 22.04+ (x86_64), with Conda and an NVIDIA driver
+580.65 or newer (CUDA 13) installed.
 
 1. Install build tools needed to compile some Isaac Lab dependencies, and
    `libglu1-mesa`, which Isaac Sim's `omni.iray` extension needs at runtime:
@@ -90,10 +94,10 @@ NVIDIA driver installed.
    git submodule update --init third_party/IsaacLab
    ```
 
-3. Create a Python 3.11 conda environment and activate it:
+3. Create a Python 3.12 conda environment and activate it:
 
    ```bash
-   conda create -n env_isaaclab python=3.11 -y
+   conda create -n env_isaaclab python=3.12 -y
    conda activate env_isaaclab
    python -m pip install --upgrade pip
    ```
@@ -101,21 +105,28 @@ NVIDIA driver installed.
 4. Install Isaac Sim and CUDA-enabled PyTorch into the active environment:
 
    ```bash
-   python -m pip install "isaacsim[all,extscache]==5.1.0" --extra-index-url https://pypi.nvidia.com
-   python -m pip install torch==2.7.0 torchvision==0.22.0 --index-url https://download.pytorch.org/whl/cu128
+   python -m pip install "isaacsim[all,extscache]==6.2.0.0" --extra-index-url https://pypi.nvidia.com
+   python -m pip install torch==2.11.0 torchvision==0.26.0 --index-url https://download.pytorch.org/whl/cu130
    ```
 
-5. Install Isaac Lab's RSL-RL extras. This installs `isaaclab`,
-   `isaaclab_rl`, and `isaaclab_tasks` in editable mode from the checkout,
-   plus `rsl-rl-lib`:
+5. Install Isaac Lab with its RSL-RL extras in editable mode from the
+   checkout, plus `rsl-rl-lib`, and MoviePy for `--video`:
 
    ```bash
-   (cd third_party/IsaacLab && ./isaaclab.sh --install rsl_rl)
+   (cd third_party/IsaacLab && ./isaaclab.sh -i 'rl[rsl-rl]')
+   # --video records with MoviePy, which Isaac Lab doesn't install by default.
+   python -m pip install "moviepy>=1.0.3,<2.0.0.dev0"
    ```
 
 Keep `env_isaaclab` active for the remaining steps. See the
-[official installation guide](https://isaac-sim.github.io/IsaacLab/main/source/setup/installation/pip_installation.html)
+[official installation guide](https://isaac-sim.github.io/IsaacLab/main/source/isaaclab/installation.html)
 for prerequisites and troubleshooting.
+
+### First launch
+
+The first run of Isaac Sim asks you to accept the NVIDIA Omniverse EULA (set
+`OMNI_KIT_ACCEPT_EULA=yes` to accept it non-interactively) and can take over
+ten minutes while it sets up its extensions.
 
 ### Robot model
 

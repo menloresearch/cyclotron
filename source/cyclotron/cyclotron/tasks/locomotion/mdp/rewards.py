@@ -25,10 +25,18 @@ if TYPE_CHECKING:
 _DEFAULT_ASSET_CFG = SceneEntityCfg("robot")
 
 CONTACT_FORCE_THRESHOLD = 1.0
+# How recent a contact counts as a first contact, as Isaac Lab 2.x had it; 3.0 defaults to half the physics step.
+FIRST_CONTACT_TOL = 1.0e-8
 
 
 def _contact_flags(sensor: ContactSensor) -> torch.Tensor:
-    return sensor.data.net_forces_w.norm(dim=-1) > CONTACT_FORCE_THRESHOLD
+    return sensor.data.net_normal_forces_w.torch.norm(dim=-1) > CONTACT_FORCE_THRESHOLD
+
+
+def _first_contact(env: ManagerBasedRLEnv, sensor: ContactSensor) -> torch.Tensor:
+    """The bodies that touched down in the last step, as a bool tensor of their own: the sensor returns a 0/1 view of
+    a buffer it reuses for the next call."""
+    return sensor.compute_first_contact(dt=env.step_dt, abs_tol=FIRST_CONTACT_TOL).torch > 0.0
 
 
 def _command_active(
@@ -47,7 +55,7 @@ def track_linear_velocity(
 ) -> torch.Tensor:
     asset: Articulation = env.scene[asset_cfg.name]
     command = env.command_manager.get_command(command_name)
-    actual = asset.data.root_lin_vel_b
+    actual = asset.data.root_lin_vel_b.torch
     xy_error = torch.sum(torch.square(command[:, :2] - actual[:, :2]), dim=1)
     z_error = torch.square(actual[:, 2])
     return torch.exp(-(xy_error + z_error) / std**2)
@@ -61,7 +69,7 @@ def track_angular_velocity(
 ) -> torch.Tensor:
     asset: Articulation = env.scene[asset_cfg.name]
     command = env.command_manager.get_command(command_name)
-    actual = asset.data.root_ang_vel_b
+    actual = asset.data.root_ang_vel_b.torch
     z_error = torch.square(command[:, 2] - actual[:, 2])
     xy_error = torch.sum(torch.square(actual[:, :2]), dim=1)
     return torch.exp(-(z_error + xy_error) / std**2)
@@ -76,7 +84,7 @@ def heading_drift(
     command = env.command_manager.get_term(command_name)
     asset: Articulation = env.scene[asset_cfg.name]
     active = command.is_heading_env & ~command.is_standing_env
-    error = math_utils.wrap_to_pi(command.heading_target - asset.data.heading_w)
+    error = math_utils.wrap_to_pi(command.heading_target - asset.data.heading_w.torch)
     return torch.square(error) * active.float()
 
 
@@ -88,7 +96,7 @@ def ankle_roll_overuse(
 ) -> torch.Tensor:
     """Penalize ankle roll motion near the mechanical limit."""
     asset: Articulation = env.scene[asset_cfg.name]
-    ankle_roll = asset.data.joint_pos[:, asset_cfg.joint_ids]
+    ankle_roll = asset.data.joint_pos.torch[:, asset_cfg.joint_ids]
     excess = torch.clamp(torch.abs(ankle_roll) - free_range, min=0.0)
     return torch.sum(torch.square(excess / (joint_limit - free_range)), dim=1)
 
@@ -99,13 +107,13 @@ def flat_orientation(
     asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
 ) -> torch.Tensor:
     asset: Articulation = env.scene[asset_cfg.name]
-    if asset_cfg.body_ids and asset_cfg.body_ids != slice(None):
-        body_quat = asset.data.body_link_quat_w[:, asset_cfg.body_ids, :].squeeze(1)
-        gravity_dir = asset.data.GRAVITY_VEC_W
+    if not isinstance(asset_cfg.body_ids, slice):
+        body_quat = asset.data.body_link_quat_w.torch[:, asset_cfg.body_ids, :].squeeze(1)
+        gravity_dir = asset.data.GRAVITY_VEC_W.torch
         projected = math_utils.quat_apply_inverse(body_quat, gravity_dir)
         xy_squared = torch.sum(torch.square(projected[:, :2]), dim=1)
     else:
-        xy_squared = torch.sum(torch.square(asset.data.projected_gravity_b[:, :2]), dim=1)
+        xy_squared = torch.sum(torch.square(asset.data.projected_gravity_b.torch[:, :2]), dim=1)
     return torch.exp(-xy_squared / std**2)
 
 
@@ -114,7 +122,7 @@ def body_angular_velocity_penalty(
     asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
 ) -> torch.Tensor:
     asset: Articulation = env.scene[asset_cfg.name]
-    ang_vel = asset.data.body_link_ang_vel_w[:, asset_cfg.body_ids, :].squeeze(1)
+    ang_vel = asset.data.body_link_ang_vel_w.torch[:, asset_cfg.body_ids, :].squeeze(1)
     return torch.sum(torch.square(ang_vel[:, :2]), dim=1)
 
 
@@ -123,7 +131,7 @@ class angular_momentum_penalty(ManagerTermBase):
     def __init__(self, cfg: RewardTermCfg, env: ManagerBasedRLEnv):
         super().__init__(cfg, env)
         asset: Articulation = env.scene[cfg.params.get("asset_cfg", _DEFAULT_ASSET_CFG).name]
-        self._masses = asset.data.default_mass.to(env.device)
+        self._masses = asset.data.body_mass.torch.clone()
         self._total_mass = self._masses.sum(dim=1, keepdim=True)
 
     def __call__(
@@ -132,8 +140,8 @@ class angular_momentum_penalty(ManagerTermBase):
         asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
     ) -> torch.Tensor:
         asset: Articulation = env.scene[asset_cfg.name]
-        pos = asset.data.body_com_pos_w
-        vel = asset.data.body_com_lin_vel_w
+        pos = asset.data.body_com_pos_w.torch
+        vel = asset.data.body_com_lin_vel_w.torch
         m = self._masses.unsqueeze(-1)
         com = (m * pos).sum(dim=1) / self._total_mass
         com_vel = (m * vel).sum(dim=1) / self._total_mass
@@ -155,8 +163,8 @@ def joint_deviation_l1(
 ) -> torch.Tensor:
     asset: Articulation = env.scene[asset_cfg.name]
     angle = (
-        asset.data.joint_pos[:, asset_cfg.joint_ids]
-        - asset.data.default_joint_pos[:, asset_cfg.joint_ids]
+        asset.data.joint_pos.torch[:, asset_cfg.joint_ids]
+        - asset.data.default_joint_pos.torch[:, asset_cfg.joint_ids]
     )
     standing = 1.0 - _command_active(env, command_name, command_threshold)
     return torch.sum(torch.abs(angle), dim=1) * standing
@@ -171,7 +179,7 @@ def feet_air_time(
     command_threshold: float = 0.5,
 ) -> torch.Tensor:
     sensor: ContactSensor = env.scene.sensors[sensor_name]
-    current_air_time = sensor.data.current_air_time
+    current_air_time = sensor.data.current_air_time.torch
     in_range = (current_air_time > threshold_min) & (current_air_time < threshold_max)
     reward = torch.sum(in_range.float(), dim=1)
     in_air = current_air_time > 0
@@ -221,7 +229,7 @@ class feet_swing_height(ManagerTermBase):
         self._peak_heights = torch.where(
             in_air, torch.maximum(self._peak_heights, foot_heights), self._peak_heights
         )
-        first_contact = sensor.compute_first_contact(dt=env.step_dt)
+        first_contact = _first_contact(env, sensor)
         active = _command_active(env, command_name, command_threshold)
         error = self._peak_heights / target_height - 1.0
         cost = torch.sum(torch.square(error) * first_contact.float(), dim=1) * active
@@ -261,8 +269,8 @@ def soft_landing(
     command_threshold: float = 0.05,
 ) -> torch.Tensor:
     sensor: ContactSensor = env.scene.sensors[sensor_name]
-    force_magnitude = sensor.data.net_forces_w.norm(dim=-1)
-    first_contact = sensor.compute_first_contact(dt=env.step_dt)
+    force_magnitude = sensor.data.net_normal_forces_w.torch.norm(dim=-1)
+    first_contact = _first_contact(env, sensor)
     landing_impact = force_magnitude * first_contact.float()
     cost = torch.sum(landing_impact, dim=1)
     num_landings = torch.clamp(torch.sum(first_contact.float()), min=1)
@@ -279,7 +287,7 @@ def feet_orientation_penalty(
     asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
 ) -> torch.Tensor:
     asset: Articulation = env.scene[asset_cfg.name]
-    body_quats = asset.data.body_link_quat_w[:, asset_cfg.body_ids]
+    body_quats = asset.data.body_link_quat_w.torch[:, asset_cfg.body_ids]
     gravity = torch.tensor([0.0, 0.0, -1.0], device=env.device)
     penalty = torch.zeros(env.num_envs, device=env.device)
     for i in range(body_quats.shape[1]):
@@ -296,7 +304,7 @@ def feet_stumble(
     ratio_threshold: float = 4.0,
 ) -> torch.Tensor:
     sensor: ContactSensor = env.scene.sensors[sensor_name]
-    forces = sensor.data.net_forces_w
+    forces = sensor.data.net_normal_forces_w.torch
     force_horizontal = torch.norm(forces[:, :, :2], dim=-1)
     force_vertical = torch.abs(forces[:, :, 2])
     stumble = force_horizontal > (ratio_threshold * force_vertical)
@@ -312,7 +320,7 @@ def feet_contact_force_limit(
     max_force: float = 350.0,
 ) -> torch.Tensor:
     sensor: ContactSensor = env.scene.sensors[sensor_name]
-    force_z = torch.abs(sensor.data.net_forces_w[:, :, 2])
+    force_z = torch.abs(sensor.data.net_normal_forces_w.torch[:, :, 2])
     total_excess = torch.sum(torch.clamp(force_z - max_force, min=0.0), dim=1)
     env.extras.setdefault("log", {})["Metrics/max_contact_force"] = torch.max(force_z)
     return total_excess
@@ -324,7 +332,7 @@ def self_collision_cost(
     force_threshold: float = 10.0,
 ) -> torch.Tensor:
     sensor: ContactSensor = env.scene.sensors[sensor_name]
-    force_matrix = sensor.data.force_matrix_w
+    force_matrix = sensor.data.normal_force_matrix_w.torch
     hit = force_matrix.norm(dim=-1) > force_threshold
     return hit.sum(dim=(1, 2)).float()
 
@@ -389,7 +397,7 @@ class variable_posture(ManagerTermBase):
         )
 
         if disturbance_std_scale > 1.0:
-            actual_lin_vel = asset.data.root_lin_vel_b
+            actual_lin_vel = asset.data.root_lin_vel_b.torch
             commanded_lin_vel = torch.zeros_like(actual_lin_vel)
             commanded_lin_vel[:, :2] = command[:, :2]
             lin_vel_error = torch.norm(actual_lin_vel - commanded_lin_vel, dim=1)
@@ -397,7 +405,7 @@ class variable_posture(ManagerTermBase):
             velocity_severity = torch.clamp(
                 (lin_vel_error - disturbance_velocity_threshold) / velocity_den, 0.0, 1.0
             )
-            tilt = torch.norm(asset.data.projected_gravity_b[:, :2], dim=1)
+            tilt = torch.norm(asset.data.projected_gravity_b.torch[:, :2], dim=1)
             tilt_den = max(disturbance_tilt_full - disturbance_tilt_threshold, 1e-6)
             tilt_severity = torch.clamp(
                 (tilt - disturbance_tilt_threshold) / tilt_den, 0.0, 1.0
@@ -410,8 +418,8 @@ class variable_posture(ManagerTermBase):
             )
 
         error_squared = torch.square(
-            asset.data.joint_pos[:, self._joint_ids]
-            - asset.data.default_joint_pos[:, self._joint_ids]
+            asset.data.joint_pos.torch[:, self._joint_ids]
+            - asset.data.default_joint_pos.torch[:, self._joint_ids]
         )
         reward = torch.exp(-torch.mean(error_squared / (std**2), dim=1))
 

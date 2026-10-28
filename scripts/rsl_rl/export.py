@@ -14,13 +14,14 @@ the PyTorch policy. A run without ``env.yaml`` or ``agent.yaml`` can have them w
 """
 
 import argparse
+import contextlib
 import os
 import shutil
 import sys
 import tempfile
 import traceback
 
-from isaaclab.app import AppLauncher
+from isaaclab.app import launch_simulation
 
 from cyclotron.hub import EXPERIMENT_TASKS, infer_task
 
@@ -56,7 +57,7 @@ parser.add_argument(
     help="Stop, instead of warning, if the code of the policy's network or the robot model changed since the run was"
     " trained, or anything else doesn't come from the run.",
 )
-AppLauncher.add_app_launcher_args(parser)
+cli_args.add_launcher_args(parser)
 args_cli, unknown_args = parser.parse_known_args()
 args_cli.headless = True
 
@@ -93,22 +94,16 @@ if args_cli.task is None:
         sys.exit(f"[ERROR] {error}")
 
 sys.argv = [sys.argv[0]]
-
-app_launcher = AppLauncher(args_cli)
-simulation_app = app_launcher.app
+args_cli.frontend = "torch"
 
 
 import importlib.metadata as metadata
 from datetime import datetime
 
-import gymnasium as gym
-from rsl_rl.runners import DistillationRunner, OnPolicyRunner
-
-import isaaclab_tasks  # noqa: F401
-from isaaclab.envs import DirectMARLEnv, multi_agent_to_single_agent
 from isaaclab.utils.dict import class_to_dict
 from isaaclab.utils.io import dump_yaml
-from isaaclab_rl.rsl_rl import RslRlVecEnvWrapper, handle_deprecated_rsl_rl_cfg, handle_deprecated_rsl_rl_checkpoint
+from isaaclab_rl.entrypoints.common import close_env, create_isaaclab_env
+from isaaclab_rl.rsl_rl import RslRlVecEnvWrapper, create_rsl_rl_runner, handle_deprecated_rsl_rl_cfg
 from isaaclab_tasks.utils.parse_cfg import load_cfg_from_registry
 
 import cyclotron.tasks  # noqa: F401
@@ -219,7 +214,7 @@ def check_policy_io(env, run_dir: str, env_cfg: dict, agent: dict, log, robot_no
         log("  The policy settings match the run's, so the robot model the current code loads resolves them")
         log("  differently: the exported policy would drive the wrong joints or gains. Never exported, also without")
         log(f"  --strict. Load the robot model the run was trained with. {check_out_hint(run_dir)}")
-        env.close()
+        close_env(env)
         sys.exit(1)
     if recorded_io:
         log("[INFO] Checked the joints and gains the policy resolves to against the run's: they match.")
@@ -234,7 +229,7 @@ def check_policy_io(env, run_dir: str, env_cfg: dict, agent: dict, log, robot_no
             log("  policy's actions still reach the same joints can't be checked.")
         if args_cli.strict:
             log("[ERROR] Stopped by --strict: the robot model changed since training (see above).")
-            env.close()
+            close_env(env)
             sys.exit(1)
     elif robot_model == ROBOT_MODEL_UNCHECKED and not recorded_io:
         log(
@@ -245,6 +240,12 @@ def check_policy_io(env, run_dir: str, env_cfg: dict, agent: dict, log, robot_no
 
 
 def main():
+    # Isaac Sim starts once the run's settings are checked and restored, which can stop the export first.
+    with contextlib.ExitStack() as simulation:
+        export(simulation)
+
+
+def export(simulation: contextlib.ExitStack):
     # Straight from the task's registration, without Hydra: nothing on the command line changes a setting.
     env_cfg = load_cfg_from_registry(args_cli.task.split(":")[-1], "env_cfg_entry_point")
     agent_cfg = load_cfg_from_registry(args_cli.task.split(":")[-1], "rsl_rl_cfg_entry_point")
@@ -337,7 +338,8 @@ def main():
     if robot_loaded:
         log(f"[INFO] {robot_loaded}")
 
-    env = gym.make(args_cli.task, cfg=env_cfg)
+    simulation.enter_context(launch_simulation(env_cfg, args_cli))
+    env = create_isaaclab_env(args_cli.task, env_cfg, args_cli, convert_marl_to_single_agent=True)
     # Written and compared where train.py saves params/: after the environment is created, which resolves parts of
     # the config.
     env_dict, agent_dict = class_to_dict(env_cfg), class_to_dict(agent_cfg)
@@ -356,7 +358,7 @@ def main():
             log(f"    {line}")
         log("  The current code changes these settings while building the environment, so the exported policy wouldn't")
         log(f"  see what it was trained with. {check_out_hint(run_dir)}")
-        env.close()
+        close_env(env)
         sys.exit(1)
     log("[INFO] Checked the rebuilt policy settings against the run's env.yaml and agent.yaml: they match.")
     io, robot_model = check_policy_io(env, run_dir, env_dict, agent_dict, log, robot_note)
@@ -374,7 +376,7 @@ def main():
                 " commit the run was trained with, or, once you have checked the values above, without --strict"
                 " (--share always uses --strict, so share from the training commit)."
             )
-            env.close()
+            close_env(env)
             sys.exit(1)
     # Only the network's code can change what the weights compute without showing in the settings or the check at the
     # end; rewards, observation functions and the rest of the library can't change what is exported.
@@ -387,7 +389,7 @@ def main():
         log(f"  For the exact training code: {check_out_hint(run_dir)}")
         if args_cli.strict:
             log("[ERROR] Stopped by --strict: the code of the policy's network changed since training (see above).")
-            env.close()
+            close_env(env)
             sys.exit(1)
     elif actor_code == ACTOR_CODE_UNRECORDED and not code_state_missing(run_dir):
         # A run without code_state.yaml was warned about above; this one has it but recorded no network code.
@@ -395,27 +397,15 @@ def main():
             f"[WARNING] The run's {CODE_STATE_FILE} records no network code (it was trained before training recorded"
             " it), so changes to the network since training can't be detected. Never a stop, also with --strict."
         )
-    if isinstance(env.unwrapped, DirectMARLEnv):
-        env = multi_agent_to_single_agent(env)
     env = RslRlVecEnvWrapper(env, clip_actions=agent_cfg.clip_actions)
 
     log(f"[INFO] Loading model checkpoint from: {checkpoint}")
-    if agent_cfg.class_name == "OnPolicyRunner":
-        runner = OnPolicyRunner(env, agent_cfg.to_dict(), log_dir=None, device=agent_cfg.device)
-    elif agent_cfg.class_name == "DistillationRunner":
-        runner = DistillationRunner(env, agent_cfg.to_dict(), log_dir=None, device=agent_cfg.device)
-    else:
-        raise ValueError(f"Unsupported runner class: {agent_cfg.class_name}")
+    runner = create_rsl_rl_runner(env, agent_cfg)
     try:
-        load_policy(
-            runner,
-            handle_deprecated_rsl_rl_checkpoint(checkpoint, installed_version),
-            agent_cfg.class_name,
-            check_out_hint(run_dir),
-        )
+        load_policy(runner, checkpoint, agent_cfg.class_name, check_out_hint(run_dir))
     except ValueError as error:
         log(f"[ERROR] {error}")
-        env.close()
+        close_env(env)
         sys.exit(1)
     policy = runner.get_inference_policy(device=env.unwrapped.device)
 
@@ -451,7 +441,7 @@ def main():
             "policy.pt": max_jit_difference(policy, obs, os.path.join(staging, "policy.pt")),
         }
         checked = f"actions and memory over {RECURRENT_STEPS} steps" if policy.is_recurrent else "actions"
-        env.close()
+        close_env(env)
         # Isaac Sim replaces sys.exit with a version that only takes an exit code, so the message is printed first.
         wrong = {name: difference for name, difference in differences.items() if difference > EXPORT_TOLERANCE}
         if wrong:
@@ -491,12 +481,10 @@ def main():
 
 
 if __name__ == "__main__":
-    # close() ends the process with the status of a sys.exit in flight, and with 0 otherwise, so an unexpected error
+    # Isaac Sim ends the process with the status of a sys.exit in flight, and with 0 otherwise, so an unexpected error
     # is turned into sys.exit(1) first: --share trusts this status before uploading.
     try:
         main()
     except Exception:
         traceback.print_exc()
         sys.exit(1)
-    finally:
-        simulation_app.close()

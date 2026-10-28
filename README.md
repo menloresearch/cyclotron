@@ -20,9 +20,9 @@ PPO and adversarial motion priors (AMP).
 For a brand-new machine with no existing Isaac Lab setup, run the install
 script from the project root. It sets up a uv-managed environment, pulls the
 pinned Isaac Lab and `asimov-1` submodules, and installs everything needed
-to train and play. Prerequisites: Ubuntu 22.04+ (x86_64), a compatible
-NVIDIA driver, [uv](https://docs.astral.sh/uv/) installed, and `sudo` access
-(used to install `cmake`/`build-essential`).
+to train and play. Prerequisites: Ubuntu 22.04+ (x86_64), an NVIDIA driver
+580.65 or newer (CUDA 13), [uv](https://docs.astral.sh/uv/) installed, about
+30 GB of free disk, and `sudo` access (used to install `cmake`/`build-essential`).
 
 ```bash
 git clone https://github.com/menloresearch/cyclotron.git

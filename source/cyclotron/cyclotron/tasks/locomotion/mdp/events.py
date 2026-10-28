@@ -25,23 +25,23 @@ def randomize_joint_default_pos(
 ):
 
     asset: Articulation = env.scene[asset_cfg.name]
-    if env_ids is None:
-        env_ids = torch.arange(env.scene.num_envs, device=asset.device)
+    # None or a slice when every environment is reset.
+    env_ids = torch.arange(env.scene.num_envs, device=asset.device)[slice(None) if env_ids is None else env_ids]
 
     if not hasattr(asset.data, "nominal_default_joint_pos"):
-        asset.data.nominal_default_joint_pos = asset.data.default_joint_pos.clone()
+        asset.data.nominal_default_joint_pos = asset.data.default_joint_pos.torch.clone()
 
     joint_ids = asset_cfg.joint_ids
     if isinstance(joint_ids, slice):
         num_joints = asset.num_joints
         joint_ids = torch.arange(num_joints, device=asset.device)
     else:
-        joint_ids = torch.tensor(joint_ids, device=asset.device)
+        joint_ids = torch.as_tensor(joint_ids, device=asset.device)
 
     offsets = torch.empty(
         (len(env_ids), len(joint_ids)), device=asset.device
     ).uniform_(ranges[0], ranges[1])
-    asset.data.default_joint_pos[env_ids[:, None], joint_ids] += offsets
+    asset.data.default_joint_pos.torch[env_ids[:, None], joint_ids] += offsets
 
     if action_name is not None and hasattr(env, "action_manager"):
         try:
@@ -50,4 +50,4 @@ def randomize_joint_default_pos(
             return
         offset = getattr(term, "_offset", None)
         if isinstance(offset, torch.Tensor):
-            term._offset = asset.data.default_joint_pos[:, term._joint_ids].clone()
+            term._offset = asset.data.default_joint_pos.torch[:, term._joint_ids].clone()

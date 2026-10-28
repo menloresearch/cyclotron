@@ -14,6 +14,21 @@ if TYPE_CHECKING:
     from isaaclab_rl.rsl_rl import RslRlBaseRunnerCfg
 
 
+def add_launcher_args(parser: argparse.ArgumentParser):
+    """Isaac Lab's launcher arguments, plus the ``--headless`` and ``--enable_cameras`` flags Isaac Lab 3.0 no longer
+    defines. Its launcher still reads both, and runs headless unless a visualizer is requested with ``--viz``."""
+    from isaaclab.app import add_launcher_args as add_isaaclab_launcher_args
+
+    add_isaaclab_launcher_args(parser)
+    arg_group = parser.add_argument_group("cyclotron launcher", description="Kept from Isaac Lab 2.x.")
+    arg_group.add_argument(
+        "--headless", action="store_true", default=False, help="Run without a window, even with a visualizer."
+    )
+    arg_group.add_argument(
+        "--enable_cameras", action="store_true", default=False, help="Enable camera rendering (implied by --video)."
+    )
+
+
 def add_rsl_rl_args(parser: argparse.ArgumentParser):
     arg_group = parser.add_argument_group("rsl_rl", description="Arguments for RSL-RL agent.")
     arg_group.add_argument(
