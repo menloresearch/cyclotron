@@ -27,6 +27,8 @@ def add_launcher_args(parser: argparse.ArgumentParser):
     arg_group.add_argument(
         "--enable_cameras", action="store_true", default=False, help="Enable camera rendering (implied by --video)."
     )
+    # Isaac Sim imports the robot's urdf, so it starts even when Newton (physics=newton_mjwarp) runs the physics.
+    parser.set_defaults(require_kit=True)
 
 
 def add_rsl_rl_args(parser: argparse.ArgumentParser):
