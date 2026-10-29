@@ -104,6 +104,7 @@ from isaaclab.utils.dict import class_to_dict
 from isaaclab.utils.io import dump_yaml
 from isaaclab_rl.entrypoints.common import close_env, create_isaaclab_env
 from isaaclab_rl.rsl_rl import RslRlVecEnvWrapper, create_rsl_rl_runner, handle_deprecated_rsl_rl_cfg
+from isaaclab_tasks.utils import resolve_presets
 from isaaclab_tasks.utils.parse_cfg import load_cfg_from_registry
 
 import cyclotron.tasks  # noqa: F401
@@ -248,6 +249,8 @@ def main():
 def export(simulation: contextlib.ExitStack):
     # Straight from the task's registration, without Hydra: nothing on the command line changes a setting.
     env_cfg = load_cfg_from_registry(args_cli.task.split(":")[-1], "env_cfg_entry_point")
+    # The task's choices, such as the physics engine, at their defaults: the exported policy doesn't depend on them.
+    env_cfg = resolve_presets(env_cfg)
     agent_cfg = load_cfg_from_registry(args_cli.task.split(":")[-1], "rsl_rl_cfg_entry_point")
     if args_cli.experiment_name is not None:
         agent_cfg.experiment_name = args_cli.experiment_name
