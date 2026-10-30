@@ -102,6 +102,8 @@ def submit(root, directory, pr=False, dry_run=False, api=None):
     spec = yaml.safe_load(published or "")
     if not isinstance(spec, dict) or spec.get("evaluation_framework") != "cyclotron":
         raise ValueError("The pinned dataset must declare evaluation_framework: cyclotron in eval.yaml")
+    # The pinned benchmark.yaml names the harness that scores its tasks; refuse results from another.
+    select_harness(root, harness.name, manifest["inspection"]["raw"])
     tasks = {task["id"]: task for task in spec.get("tasks", [])}
     proposals = []
     repos = set()
@@ -114,9 +116,6 @@ def submit(root, directory, pr=False, dry_run=False, api=None):
             task = tasks.get(entry["dataset"]["task_id"])
             if task is None:
                 raise ValueError("Result task IDs are not declared in the pinned dataset's eval.yaml")
-            declared = (task.get("harness") or {}).get("name")
-            if declared not in (None, harness.name):
-                raise ValueError(f"eval.yaml says {task['id']} is scored by {declared}, but this run used {harness.name}")
         path = eval_path(dataset["id"])
         old = read_repo_text(api, policy["id"], path, policy["sha"])
         content = merge_results(old, entries)

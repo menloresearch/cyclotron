@@ -255,11 +255,6 @@ tasks:                          # leaderboard numbers; _v<version> is appended t
     def inspect_benchmark(self, directory, commit=None):
         return self.inspect("benchmark", directory, *([commit] if commit else []))
 
-    def task_harness(self, inspection, commit):
-        # Each eval.yaml task names the harness that runs and scores it, under the benchmark's protocol.
-        protocol = (inspection["raw"].get("harness") or {}).get("protocol")
-        return {"name": self.name, "repo": self.repo, "protocol": protocol, "commit": commit}
-
     def inspect_policy(self, item):
         info = self.inspect("policy", item["path"])
         if info["errors"]:

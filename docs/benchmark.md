@@ -104,10 +104,10 @@ also works. For example, `--jobs 2` and `jobs=2` are equivalent.
 | `--watch`, `--verbose` | HPV display/debug options |
 | `--harness <name>` | Explicit registered harness; `CYCLOTRON_HARNESS` is an alternative |
 
-Harness selection otherwise follows the `harness` that a published benchmark's
-`eval.yaml` tasks name (see [the harness block](#the-harness-in-evalyaml)), then
-`harness.name` or a recognized `harness.repo` in `benchmark.yaml`. Legacy HPV
-repository identities still work. Conflicting
+Harness selection otherwise follows `harness.name` or a recognized
+`harness.repo` in the benchmark's `benchmark.yaml` (see
+[the harness and eval.yaml](#the-harness-and-evalyaml)). Legacy HPV repository
+identities still work. Conflicting
 selections and unknown harnesses are rejected. Dataset URLs never install plugins.
 Saved results use their recorded harness.
 
@@ -234,8 +234,8 @@ Before writing remotely, cyclotron:
    blocker gives the `git fetch` command to run.
 4. Records the harness's commit in `harness.tested_commit`, writes each test
    row in its Hub form (see [start poses](#start-poses-and-their-hub-form)),
-   builds `eval.yaml` with `evaluation_framework: cyclotron` and each task's
-   `harness`, preserves historical task IDs, and builds the dataset card while
+   builds `eval.yaml` with `evaluation_framework: cyclotron` and only the keys
+   the Hub's schema allows, preserves historical task IDs, and builds the dataset card while
    retaining README prose and unrelated metadata.
 5. Uses an optimistic parent commit, removes obsolete benchmark files, and
    tags successful direct version releases. PRs are tagged only after merging.
@@ -270,32 +270,38 @@ the harness gives cyclotron every file as it is to be published. HPV reads both
 forms, so a published benchmark has the same scored-content hash as the folder
 it came from.
 
-### The harness in eval.yaml
+### The harness and eval.yaml
 
 Cyclotron is the evaluation framework; the harness runs and scores a
 benchmark (HPV is the first). The
-[eval.yaml spec](https://huggingface.co/docs/hub/en/eval-results) fixes the
-top-level fields, and keeps framework-specific settings in each task, as with
-inspect-ai's `solvers` and `scorers`. So each task names its harness:
+[eval.yaml spec](https://huggingface.co/docs/hub/en/eval-results) is a closed
+schema, checked when you push: `name`, `description`, `evaluation_framework`
+and `tasks`, each task with `id`, `config` and `split` (only inspect-ai adds
+task fields of its own). So `eval.yaml` says only what to score:
 
 ```yaml
 evaluation_framework: cyclotron
 tasks:
-- id: survival_rate_v2
+- id: survival_rate_v1
   config: all
   split: test
-  harness:
-    name: humanoid-policy-viewer
-    repo: https://github.com/menloresearch/humanoid-policy-viewer
-    protocol: 2
-    commit: 5c4e24efae725205c667f0c73af237827e11b985
 ```
 
-`name` is the registered harness, `protocol` the scoring protocol the results
-are comparable under, and `commit` the harness commit the benchmark was checked
-with. Running a published benchmark selects that harness, and `submit` refuses a
-result made with a different one. Tasks from earlier versions keep the block
-they were published with. The card is tagged `cyclotron` plus the benchmark's
+The harness is recorded in the published `benchmark.yaml`:
+
+```yaml
+harness:
+  repo: https://github.com/menloresearch/humanoid-policy-viewer
+  protocol: 2
+  tested_commit: 5c4e24efae725205c667f0c73af237827e11b985
+```
+
+`repo` selects the registered harness, `protocol` is the scoring protocol the
+results are comparable under, and `tested_commit` the harness commit the
+benchmark was checked with. Running a published benchmark selects that harness,
+`submit` refuses a result made with a different one, and each submitted result's
+`notes` record the harness commit and protocol it ran with. Publishing drops a
+`harness` block an earlier cyclotron wrote into a task. The card is tagged `cyclotron` plus the benchmark's
 own `tags`, not the harness's name.
 
 Set `license:` in `benchmark.yaml` to a Hub license ID or a publishable license
@@ -324,21 +330,16 @@ has no publish or submit commands.
 
 ### Hub registration (external prerequisite)
 
-The Hub must recognize `cyclotron` as an evaluation framework. This repository
-cannot make that registration locally. Before live benchmark publication:
+The Hub must recognize `cyclotron` as an evaluation framework:
 
-1. Propose `cyclotron` in the framework registry at
-   [huggingface.js/packages/tasks/src/eval.ts](https://github.com/huggingface/huggingface.js/blob/main/packages/tasks/src/eval.ts),
-   following the current entry type and linking to this project's evaluation
-   documentation. The framework identity is cyclotron; HPV is a harness.
-2. Obtain any benchmark-dataset beta/allow-list approval required by the Hub.
-3. Test registration on a private dataset before a public release, including
-   that the per-task `harness` block passes the Hub's push-time validation
-   (other frameworks' per-task fields, such as `lower_is_better`, already do).
-
-No registration PR, approval or live publication is implied by this code.
-Local editing/runs and metadata dry-runs work independently; the Hub may reject
-`eval.yaml` until registration is available. See the
+1. `cyclotron` is registered in the framework registry,
+   [huggingface.js/packages/tasks/src/eval.ts](https://github.com/huggingface/huggingface.js/blob/main/packages/tasks/src/eval.ts).
+   The framework identity is cyclotron; HPV is a harness.
+2. A benchmark dataset also needs the Hub's beta allow-list approval before its
+   leaderboard appears.
+3. The Hub validates `eval.yaml` when you push and rejects keys outside its
+   schema, so check a new benchmark's dataset page for a metadata error after
+   publishing it. See the
 [Hub eval-results specification](https://huggingface.co/docs/hub/en/eval-results).
 
 ## Storage and adding a harness

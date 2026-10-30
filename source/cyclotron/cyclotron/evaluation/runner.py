@@ -27,11 +27,8 @@ def resolve_benchmark(root, target, harness_name=None):
     raw = yaml.safe_load((directory / "benchmark.yaml").read_text())
     if not isinstance(raw, dict):
         raise ValueError("benchmark.yaml must contain a mapping")
-    # Published benchmarks name their harness in eval.yaml; local folders have none until publication.
-    spec = yaml.safe_load((directory / "eval.yaml").read_text()) if (directory / "eval.yaml").is_file() else None
-    if spec is not None and not isinstance(spec, dict):
-        raise ValueError("eval.yaml must contain a mapping")
-    adapter = select_harness(root, harness_name, raw, spec)
+    # benchmark.yaml names the harness (harness.repo, or harness.name); eval.yaml has no room for it.
+    adapter = select_harness(root, harness_name, raw)
     adapter.prepare()
     item["files"] = file_manifest(directory)
     return adapter, item

@@ -117,20 +117,19 @@ def test_adapter_registry(monkeypatch):
             select_harness(ROOT, benchmark=raw)
 
 
-def test_published_harness_is_selected(monkeypatch):
+def test_benchmark_yaml_names_the_harness(monkeypatch, tmp_path):
     monkeypatch.delenv("CYCLOTRON_HARNESS", raising=False)
-    def spec(*names):
-        return {"tasks": [{"id": f"t{i}", **({"harness": {"name": n}} if n else {})} for i, n in enumerate(names)]}
-    legacy = {"harness": {"repo": HPV.repo}}
-    assert select_harness(ROOT, spec=spec(HPV.name)).name == HPV.name
-    assert select_harness(ROOT, benchmark=legacy, spec=spec(None)).name == HPV.name
-    for raw, published in ((legacy, spec("other")), ({}, spec(HPV.name, "other")), ({}, spec("other"))):
-        with pytest.raises(ValueError):
-            select_harness(ROOT, benchmark=raw, spec=published)
+    monkeypatch.setattr(HPV, "prepare", lambda self: None)
+    raw = {"harness": {"repo": HPV.repo}}
+    assert select_harness(ROOT, HPV.name, raw).name == HPV.name
     with pytest.raises(ValueError, match="conflicts"):
-        select_harness(ROOT, "other", spec=spec(HPV.name))
-    block = HPV(ROOT).task_harness({"raw": {"harness": {"protocol": 1}}}, SHA)
-    assert block == {"name": HPV.name, "repo": HPV.repo, "protocol": 1, "commit": SHA}
+        select_harness(ROOT, "other", raw)
+    # eval.yaml has no room for a harness (the Hub rejects unknown task keys), and a harness block an
+    # earlier cyclotron published there is ignored: benchmark.yaml decides.
+    suite = tmp_path / "suite"
+    shutil.copytree(ROOT / "benchmarks/default", suite)
+    (suite / "eval.yaml").write_text("evaluation_framework: cyclotron\ntasks:\n- id: t_v1\n  harness: {name: other}\n")
+    assert runner.resolve_benchmark(ROOT, str(suite))[0].name == HPV.name
 
 
 def test_manifest_rejects_symlinks_and_missing_files(tmp_path):
@@ -418,26 +417,31 @@ def test_eval_yaml_merge_and_quoted_date(recorded_result):
         build_entries(run, manifest, "m0", manifest["policies"][0])
 
 
-@pytest.mark.parametrize("harness", ["", "\n  harness: {name: humanoid-policy-viewer}", "\n  harness: {name: other-harness}"])
-def test_submit_dry_run_pinned_inputs_and_no_writes(recorded_result, tmp_path, monkeypatch, harness):
+@pytest.mark.parametrize("block,declared", [("", None), ("\n  harness: {name: humanoid-policy-viewer}", None),
+                                            ("\n  harness: {name: other-harness}", None), ("", "other-harness")])
+def test_submit_dry_run_pinned_inputs_and_no_writes(recorded_result, tmp_path, monkeypatch, block, declared):
     from cyclotron.evaluation import eval_results
 
     run, manifest = recorded_result
+    if declared:
+        raw = {**manifest["inspection"]["raw"], "harness": {"name": declared, "protocol": 1}}
+        manifest["inspection"]["raw"] = run["benchmark"]["raw"] = raw
     provenance.write_json(tmp_path / "result.json", run)
     manifest["result_sha256"] = provenance.sha256(tmp_path / "result.json")
     provenance.write_json(tmp_path / "cyclotron.json", manifest)
     monkeypatch.setattr(eval_results, "download", lambda ref, *a, **kw: {"sha": ref["revision"], "files": {}})
-    read = Mock(side_effect=[f"evaluation_framework: cyclotron\ntasks:\n- id: score_v1{harness}", None])
+    read = Mock(side_effect=[f"evaluation_framework: cyclotron\ntasks:\n- id: score_v1{block}", None])
     monkeypatch.setattr(eval_results, "read_repo_text", read)
     commit = Mock()
     monkeypatch.setattr(eval_results, "commit_files", commit)
     api = Mock(endpoint="https://huggingface.co")
     api.list_repo_commits.return_value = [SimpleNamespace(commit_id="b" * 40), SimpleNamespace(commit_id=SHA)]
-    if "other-harness" in harness:
-        # A task's results only count from the harness its eval.yaml names.
-        with pytest.raises(ValueError, match="scored by other-harness"):
+    if declared:
+        # The pinned benchmark.yaml names the harness that scores it; a result from another is refused.
+        with pytest.raises(ValueError, match="conflicts with benchmark harness other-harness"):
             submit(ROOT, tmp_path, dry_run=True, api=api)
     else:
+        # A harness block an earlier cyclotron wrote into eval.yaml is ignored.
         assert len(submit(ROOT, tmp_path, dry_run=True, api=api)) == 1
         assert read.call_args.args[3] == SHA
     commit.assert_not_called()
