@@ -17,8 +17,6 @@ from cyclotron.evaluation.provenance import file_manifest, read_json, write_json
 SHA = "a" * 40
 ROOT = Path(__file__).resolve().parents[1]
 START = {"pos": [0, 0, 0.16], "rot": [0.7071068, 0, -0.7071068, 0], "joint_pos": {".*_knee_joint": 0.6}}
-HARNESS = {"name": "humanoid-policy-viewer", "repo": "https://github.com/menloresearch/humanoid-policy-viewer",
-           "protocol": 1, "commit": SHA}
 
 
 def http_error(status, cls=HfHubHTTPError):
@@ -85,16 +83,19 @@ def test_version_guard(inspection):
 def test_metadata_preserves_prose_and_historical_tasks(tmp_path, inspection):
     previous = tmp_path / "previous"
     previous.mkdir()
-    (previous / "eval.yaml").write_text("tasks:\n- id: score_v1\n  config: all\n- id: score_v2\n  config: old\n")
+    (previous / "eval.yaml").write_text(
+        "tasks:\n- id: score_v1\n  config: all\n- id: score_v2\n  config: old\n  harness: {name: humanoid-policy-viewer}\n")
     (tmp_path / "README.md").write_text(
         "---\ncustom: preserved\ntags: [custom, humanoid-policy-viewer]\n---\n\nResearch notes.\n")
-    generated = publishing.hub_files(inspection, tmp_path, previous, harness=HARNESS)
+    generated = publishing.hub_files(inspection, tmp_path, previous, harness=HPV.name)
     spec = yaml.safe_load(generated["eval.yaml"])
     assert spec["evaluation_framework"] == "cyclotron"
     assert set(spec) == {"name", "description", "evaluation_framework", "tasks"}
     assert [task["id"] for task in spec["tasks"]] == ["score_v2", "score_v1"]
-    # New tasks name their harness; a historical task keeps what it was published with.
-    assert spec["tasks"][0]["harness"] == HARNESS and "harness" not in spec["tasks"][1]
+    # The Hub's schema allows only id, config and split in a task, so a historical task loses its
+    # harness block (benchmark.yaml records the harness) and keeps the rest.
+    assert all(set(task) <= set(publishing.TASK_KEYS) for task in spec["tasks"])
+    assert spec["tasks"][1] == {"id": "score_v1", "config": "all"}
     assert "&" not in generated["eval.yaml"]
     front, body = publishing.split_card(generated["README.md"])
     assert front["custom"] == "preserved"
@@ -107,11 +108,11 @@ def test_license_requires_deliberate_choice(tmp_path, inspection):
     inspection["raw"].pop("license")
     inspection["card"].pop("license")
     with pytest.raises(ValueError, match="license"):
-        publishing.hub_files(inspection, tmp_path, harness=HARNESS)
+        publishing.hub_files(inspection, tmp_path, harness=HPV.name)
     (tmp_path / "README.md").write_text("---\nlicense: mit\n---\nNotes")
-    assert "license: mit" in publishing.hub_files(inspection, tmp_path, harness=HARNESS)["README.md"]
+    assert "license: mit" in publishing.hub_files(inspection, tmp_path, harness=HPV.name)["README.md"]
     inspection["raw"]["license"] = None
-    assert "license:" not in publishing.hub_files(inspection, tmp_path, harness=HARNESS)["README.md"]
+    assert "license:" not in publishing.hub_files(inspection, tmp_path, harness=HPV.name)["README.md"]
 
 
 def test_publish_offers_a_license_and_never_assumes_one(tmp_path, monkeypatch):
@@ -170,7 +171,6 @@ def publication(tmp_path, monkeypatch, inspection):
     harness.name = HPV.name
     harness.state.return_value = state
     harness.inspect_benchmark.return_value = inspection
-    harness.task_harness.return_value = HARNESS
     harness.fetch_history.return_value = None
     monkeypatch.setattr(publishing, "select_harness", lambda *a, **kw: harness)
     monkeypatch.setattr(publishing, "git_state", lambda *a: state.copy())
@@ -186,8 +186,9 @@ def test_publish_dry_run_does_not_mutate_folder_or_hub(publication):
     assert not result["blockers"]
     spec = yaml.safe_load(result["files"]["eval.yaml"])
     assert spec["evaluation_framework"] == "cyclotron"
-    # The harness block records the harness commit the benchmark was checked with.
-    assert harness.task_harness.call_args.args[1] == SHA and spec["tasks"][0]["harness"] == HARNESS
+    # Only what the Hub's eval.yaml schema accepts; the harness is recorded in benchmark.yaml.
+    assert set(spec) == {"name", "description", "evaluation_framework", "tasks"}
+    assert all(set(task) <= set(publishing.TASK_KEYS) for task in spec["tasks"])
     assert file_manifest(directory) == before
     api.create_repo.assert_not_called()
     api.create_commit.assert_not_called()
