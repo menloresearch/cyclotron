@@ -230,6 +230,18 @@ def test_deploy_metadata_round_trip_leaves_the_graph_unchanged(tmp_path, trained
     assert read["trained_commit"] == "32aef5c5ec11"
 
 
+def test_deploy_metadata_leaves_policy_onnx_as_the_one_file_with_the_weights(tmp_path, trained):
+    import onnx
+
+    policy, obs = trained
+    path = export(policy, tmp_path)
+    attach_deploy_metadata(path, sample_metadata())
+    assert os.listdir(tmp_path) == ["policy.onnx"]
+    stored_apart = [t.name for t in onnx.load(path, load_external_data=False).graph.initializer if t.data_location]
+    assert stored_apart == []
+    assert max_onnx_difference(policy, obs, path) < 1e-5
+
+
 def test_deploy_metadata_names_the_robot_model_the_run_was_trained_with():
     robot = {"name": "asimov_1", "repo": "menloresearch/asimov-1", "urdf_filepath": "sim-model/urdf/asimov_1.urdf"}
     robot.update(sha256="abc", commit="732cc60", dirty=False)

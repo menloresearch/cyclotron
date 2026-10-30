@@ -7,16 +7,39 @@
 
 
 import argparse
-import sys
+import logging
+import os
+import time
+from datetime import datetime
 
-from isaaclab.app import AppLauncher
+import torch
+import torch.distributed as dist
+
+from isaaclab.app import launch_simulation
+from isaaclab.envs import ManagerBasedRLEnvCfg
+from isaaclab.utils.dict import class_to_dict
+from isaaclab.utils.io import dump_yaml
+from isaaclab_rl.entrypoints.common import (
+    add_video_args,
+    apply_video_recording,
+    close_env,
+    create_isaaclab_env,
+    enable_cameras_for_video,
+    pre_launch_video_config,
+    set_hydra_args,
+    validate_distributed_device,
+)
+from isaaclab_rl.rsl_rl import RslRlVecEnvWrapper, create_rsl_rl_runner, handle_deprecated_rsl_rl_cfg
+from isaaclab_tasks.utils import resolve_task_config, setup_preset_cli
+
+import cyclotron.tasks  # noqa: F401
+from cyclotron.code_state import hash_run_configs, record_code_state, write_code_state
+from cyclotron.policy_io import resolve_policy_io
 
 import cli_args  # isort: skip
 
 parser = argparse.ArgumentParser(description="Train an RL agent with RSL-RL.")
-parser.add_argument("--video", action="store_true", default=False, help="Record videos during training.")
-parser.add_argument("--video_length", type=int, default=200, help="Length of the recorded video (in steps).")
-parser.add_argument("--video_interval", type=int, default=2000, help="Interval between video recordings (in steps).")
+add_video_args(parser, action="training")
 parser.add_argument("--num_envs", type=int, default=None, help="Number of environments to simulate.")
 parser.add_argument("--task", type=str, default=None, help="Name of the task.")
 parser.add_argument(
@@ -32,63 +55,28 @@ parser.add_argument(
     "--ray-proc-id", "-rid", type=int, default=None, help="Automatically configured by Ray integration, otherwise None."
 )
 cli_args.add_rsl_rl_args(parser)
-AppLauncher.add_app_launcher_args(parser)
-args_cli, hydra_args = parser.parse_known_args()
+cli_args.add_launcher_args(parser)
+args_cli, hydra_args = setup_preset_cli(parser)
+args_cli.frontend = "torch"
+enable_cameras_for_video(args_cli)
+set_hydra_args(hydra_args)
 
-if args_cli.video:
-    args_cli.enable_cameras = True
-
-sys.argv = [sys.argv[0]] + hydra_args
-
-app_launcher = AppLauncher(args_cli)
-simulation_app = app_launcher.app
+RSL_RL_VERSION = "5.5.1"
 
 
 import importlib.metadata as metadata
-import platform
 
 from packaging import version
 
-RSL_RL_VERSION = "5.0.1"
 installed_version = metadata.version("rsl-rl-lib")
 if version.parse(installed_version) < version.parse(RSL_RL_VERSION):
-    if platform.system() == "Windows":
-        cmd = [r".\isaaclab.bat", "-p", "-m", "pip", "install", f"rsl-rl-lib=={RSL_RL_VERSION}"]
-    else:
-        cmd = ["./isaaclab.sh", "-p", "-m", "pip", "install", f"rsl-rl-lib=={RSL_RL_VERSION}"]
     print(
         f"Please install the correct version of RSL-RL.\nExisting version is: '{installed_version}'"
         f" and required version is: '{RSL_RL_VERSION}'.\nTo install the correct version, run:"
-        f"\n\n\t{' '.join(cmd)}\n"
+        f"\n\n\tpip install rsl-rl-lib=={RSL_RL_VERSION}\n"
     )
     exit(1)
 
-
-import logging
-import os
-import time
-from datetime import datetime
-
-import gymnasium as gym
-import torch
-from rsl_rl.runners import DistillationRunner, OnPolicyRunner
-
-import isaaclab_tasks  # noqa: F401
-from isaaclab.envs import (
-    DirectMARLEnv,
-    DirectMARLEnvCfg,
-    DirectRLEnvCfg,
-    ManagerBasedRLEnvCfg,
-    multi_agent_to_single_agent,
-)
-from isaaclab.utils.dict import class_to_dict, print_dict
-from isaaclab.utils.io import dump_yaml
-from isaaclab_rl.rsl_rl import RslRlBaseRunnerCfg, RslRlVecEnvWrapper, handle_deprecated_rsl_rl_cfg
-from isaaclab_tasks.utils.hydra import hydra_task_config
-
-import cyclotron.tasks  # noqa: F401
-from cyclotron.code_state import hash_run_configs, record_code_state, write_code_state
-from cyclotron.policy_io import resolve_policy_io
 
 logger = logging.getLogger(__name__)
 
@@ -97,10 +85,13 @@ torch.backends.cudnn.allow_tf32 = True
 torch.backends.cudnn.deterministic = False
 torch.backends.cudnn.benchmark = False
 
+# The rank of this process with --distributed, None otherwise; set by torch.distributed.run.
+RANK = int(os.getenv("RANK", "0")) if args_cli.distributed else None
+
 
 def print_run_info(log_dir: str) -> None:
     """Print where the run is stored and how to resume it."""
-    if args_cli.distributed and app_launcher.local_rank != 0:
+    if RANK not in (None, 0):
         return
     resume_cmd = f"./cyclotron.sh --train --task {args_cli.task} --resume --load_run {os.path.basename(log_dir)}"
     if args_cli.num_envs is not None:
@@ -111,8 +102,14 @@ def print_run_info(log_dir: str) -> None:
     print(f"[INFO] To resume this run from its latest checkpoint: {resume_cmd}", flush=True)
 
 
-@hydra_task_config(args_cli.task, args_cli.agent)
-def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agent_cfg: RslRlBaseRunnerCfg):
+def main():
+    env_cfg, agent_cfg = resolve_task_config(args_cli.task, args_cli.agent)
+    pre_launch_video_config(env_cfg, args_cli)
+    with launch_simulation(env_cfg, args_cli):
+        train(env_cfg, agent_cfg)
+
+
+def train(env_cfg, agent_cfg):
     agent_cfg = cli_args.update_rsl_rl_cfg(agent_cfg, args_cli)
     env_cfg.scene.num_envs = args_cli.num_envs if args_cli.num_envs is not None else env_cfg.scene.num_envs
     agent_cfg.max_iterations = (
@@ -121,21 +118,14 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
 
     agent_cfg = handle_deprecated_rsl_rl_cfg(agent_cfg, installed_version)
 
+    validate_distributed_device(args_cli)
+    if not args_cli.distributed and args_cli.device is not None:
+        env_cfg.sim.device = args_cli.device
+    if RANK is not None:
+        # launch_simulation put this process's environment on its own GPU; the agent follows it.
+        agent_cfg.device = env_cfg.sim.device
+        agent_cfg.seed += RANK
     env_cfg.seed = agent_cfg.seed
-    env_cfg.sim.device = args_cli.device if args_cli.device is not None else env_cfg.sim.device
-    if args_cli.distributed and args_cli.device is not None and "cpu" in args_cli.device:
-        raise ValueError(
-            "Distributed training is not supported when using CPU device. "
-            "Please use GPU device (e.g., --device cuda) for distributed training."
-        )
-
-    if args_cli.distributed:
-        env_cfg.sim.device = f"cuda:{app_launcher.local_rank}"
-        agent_cfg.device = f"cuda:{app_launcher.local_rank}"
-
-        seed = agent_cfg.seed + app_launcher.local_rank
-        env_cfg.seed = seed
-        agent_cfg.seed = seed
 
     log_root_path = os.path.join("logs", "rsl_rl", agent_cfg.experiment_name)
     log_root_path = os.path.abspath(log_root_path)
@@ -154,11 +144,9 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         )
 
     env_cfg.log_dir = log_dir
+    apply_video_recording(env_cfg, log_dir, args_cli)
 
-    env = gym.make(args_cli.task, cfg=env_cfg, render_mode="rgb_array" if args_cli.video else None)
-
-    if isinstance(env.unwrapped, DirectMARLEnv):
-        env = multi_agent_to_single_agent(env)
+    env = create_isaaclab_env(args_cli.task, env_cfg, args_cli, convert_marl_to_single_agent=True)
 
     # Passing --checkpoint implies --resume.
     agent_cfg.resume = agent_cfg.resume or args_cli.checkpoint is not None
@@ -166,35 +154,19 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     if loads_checkpoint:
         resume_path = cli_args.resolve_checkpoint(log_root_path, agent_cfg, args_cli)
 
-    if args_cli.video:
-        video_kwargs = {
-            "video_folder": os.path.join(log_dir, "videos", "train"),
-            "step_trigger": lambda step: step % args_cli.video_interval == 0,
-            "video_length": args_cli.video_length,
-            "disable_logger": True,
-        }
-        print("[INFO] Recording videos during training.")
-        print_dict(video_kwargs, nesting=4)
-        env = gym.wrappers.RecordVideo(env, **video_kwargs)
-
     start_time = time.time()
 
     env = RslRlVecEnvWrapper(env, clip_actions=agent_cfg.clip_actions)
 
-    if agent_cfg.class_name == "OnPolicyRunner":
-        runner = OnPolicyRunner(env, agent_cfg.to_dict(), log_dir=log_dir, device=agent_cfg.device)
-    elif agent_cfg.class_name == "DistillationRunner":
-        runner = DistillationRunner(env, agent_cfg.to_dict(), log_dir=log_dir, device=agent_cfg.device)
-    else:
-        raise ValueError(f"Unsupported runner class: {agent_cfg.class_name}")
+    runner = create_rsl_rl_runner(env, agent_cfg, log_dir=log_dir)
     runner.add_git_repo_to_log(__file__)
     if loads_checkpoint:
         print(f"[INFO]: Loading model checkpoint from: {resume_path}")
-        runner.load(resume_path)
+        runner.load(resume_path, map_location=agent_cfg.device)
 
     # Only the main process writes params/, like rsl_rl's logger: ranks that start in the same second share log_dir,
     # and another rank's env.yaml (its own device and seed) wouldn't match the hashes this one records.
-    if not args_cli.distributed or app_launcher.global_rank == 0:
+    if RANK in (None, 0):
         dump_yaml(os.path.join(log_dir, "params", "env.yaml"), env_cfg)
         dump_yaml(os.path.join(log_dir, "params", "agent.yaml"), agent_cfg)
         # The sha256 of the two files just written, so --export and --share notice if they are edited later.
@@ -224,9 +196,11 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
 
     print(f"Training time: {round(time.time() - start_time, 2)} seconds")
 
-    env.close()
+    close_env(env)
+    # The RL library creates the process group but never destroys it, which torch warns about at exit.
+    if dist.is_initialized():
+        dist.destroy_process_group()
 
 
 if __name__ == "__main__":
     main()
-    simulation_app.close()

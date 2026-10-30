@@ -2,11 +2,11 @@
 # All rights reserved.
 #
 # SPDX-License-Identifier: BSD-3-Clause
-"""Asimov-1 MDP terms."""
+"""Asimov-1 MDP terms, and Isaac Lab's for any name not defined here (``__init__.pyi``).
 
-from isaaclab.envs.mdp import *  # noqa: F401, F403
+Loaded lazily, so the task configs can be read before Isaac Sim starts without importing every term's dependencies.
+"""
 
-from .commands import *  # noqa: F401, F403
-from .events import *  # noqa: F401, F403
-from .observations import *  # noqa: F401, F403
-from .rewards import *  # noqa: F401, F403
+from isaaclab.utils.module import lazy_export
+
+lazy_export()

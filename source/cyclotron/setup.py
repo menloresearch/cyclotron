@@ -19,10 +19,10 @@ setup(
     url=EXTENSION_METADATA["repository"],
     license="BSD-3-Clause",
     packages=find_packages(),
-    package_data={"cyclotron": ["tasks/locomotion/motions/*.npz"]},
+    package_data={"cyclotron": ["tasks/locomotion/motions/*.npz", "tasks/locomotion/mdp/*.pyi"]},
     include_package_data=True,
-    install_requires=["numpy<2", "rsl-rl-lib==5.0.1", "huggingface_hub>=0.36,<2", "PyYAML>=6", "filelock>=3", "onnx", "onnxruntime", "onnxscript"],
-    python_requires=">=3.10",
+    install_requires=["numpy>=2", "rsl-rl-lib==5.5.1", "huggingface_hub>=0.36,<2", "PyYAML>=6", "filelock>=3", "onnx", "onnxruntime", "onnxscript"],
+    python_requires=">=3.12",
     classifiers=[
         "Natural Language :: English",
         "Programming Language :: Python :: 3",

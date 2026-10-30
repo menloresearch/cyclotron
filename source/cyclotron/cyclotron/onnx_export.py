@@ -138,10 +138,18 @@ def deploy_metadata_from_io(
 def attach_deploy_metadata(onnx_path: str, metadata: dict[str, str]) -> None:
     """Store ``metadata`` plus the graph's own input and output widths in the ONNX file's metadata_props.
 
-    The graph itself is untouched; runtimes that do not read metadata run the file unchanged.
+    The graph itself is untouched; runtimes that do not read metadata run the file unchanged. Weights torch's exporter
+    wrote to a file of their own (``policy.onnx.data``) are stored in ``onnx_path`` too and that file removed: the robot
+    and the viewer load ``policy.onnx`` on its own.
     """
     import onnx
+    from onnx.external_data_helper import ExternalDataInfo, uses_external_data
 
+    sidecars = {
+        ExternalDataInfo(tensor).location
+        for tensor in onnx.load(onnx_path, load_external_data=False).graph.initializer
+        if uses_external_data(tensor)
+    }
     model = onnx.load(onnx_path)
     dims = {
         name: [d.dim_value for d in value.type.tensor_type.shape.dim]
@@ -154,6 +162,8 @@ def attach_deploy_metadata(onnx_path: str, metadata: dict[str, str]) -> None:
     for key, value in entries.items():
         model.metadata_props.add(key=key, value=value)
     onnx.save(model, onnx_path)
+    for location in sidecars:
+        os.remove(os.path.join(os.path.dirname(onnx_path), location))
 
 
 EXPORT_LOG = "export.log"
