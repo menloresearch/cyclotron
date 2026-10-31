@@ -6,6 +6,8 @@
 
 import math
 
+from isaaclab_physx.physics import PhysxCfg
+
 import isaaclab.sim as sim_utils
 import isaaclab.terrains as terrain_gen
 from isaaclab.assets import ArticulationCfg, AssetBaseCfg
@@ -20,7 +22,7 @@ from isaaclab.scene import InteractiveSceneCfg
 from isaaclab.sensors import ContactSensorCfg
 from isaaclab.terrains import TerrainImporterCfg
 from isaaclab.utils import configclass
-from isaaclab.utils.noise import AdditiveUniformNoiseCfg as Unoise
+from isaaclab.utils.noise import UniformNoiseCfg as Unoise
 
 from cyclotron.assets.robots.asimov_1 import (
     ASIMOV_1_ACTION_SCALE,
@@ -72,6 +74,8 @@ SLOT_4_5 = (
 
 FEET_BODIES = ["left_ankle_roll_link", "right_ankle_roll_link"]
 TORSO_BODY = "waist_yaw_link"
+# The root link's prim in the robot USD; the urdf importer nests every other link below it.
+_PELVIS_PATH = "{ENV_REGEX_NS}/Robot/Geometry/pelvis_link"
 
 POSE_JOINT_PATTERNS = (
     ".*_hip_pitch_joint", ".*_hip_roll_joint", ".*_hip_yaw_joint",
@@ -118,15 +122,21 @@ class Asimov1SceneCfg(InteractiveSceneCfg):
         history_length=3,
         track_air_time=True,
     )
+    # The urdf importer nests each link under its parent link, below Geometry/, and PhysX needs each filter to match
+    # exactly one body per environment, so each link is named with its full place in the tree.
     self_collision = ContactSensorCfg(
         prim_path="{ENV_REGEX_NS}/Robot/.*_(wrist_yaw|elbow|knee|ankle_roll)_link",
         filter_prim_paths_expr=[
-            "{ENV_REGEX_NS}/Robot/pelvis_link",
-            "{ENV_REGEX_NS}/Robot/waist_yaw_link",
-            "{ENV_REGEX_NS}/Robot/.*_hip_pitch_link",
-            "{ENV_REGEX_NS}/Robot/.*_hip_roll_link",
-            "{ENV_REGEX_NS}/Robot/.*_hip_yaw_link",
-            "{ENV_REGEX_NS}/Robot/.*_shoulder_roll_link",
+            _PELVIS_PATH,
+            _PELVIS_PATH + "/waist_yaw_link",
+            _PELVIS_PATH + "/left_hip_pitch_link",
+            _PELVIS_PATH + "/right_hip_pitch_link",
+            _PELVIS_PATH + "/left_hip_pitch_link/left_hip_roll_link",
+            _PELVIS_PATH + "/right_hip_pitch_link/right_hip_roll_link",
+            _PELVIS_PATH + "/left_hip_pitch_link/left_hip_roll_link/left_hip_yaw_link",
+            _PELVIS_PATH + "/right_hip_pitch_link/right_hip_roll_link/right_hip_yaw_link",
+            _PELVIS_PATH + "/waist_yaw_link/left_shoulder_pitch_link/left_shoulder_roll_link",
+            _PELVIS_PATH + "/waist_yaw_link/right_shoulder_pitch_link/right_shoulder_roll_link",
         ],
     )
 
@@ -519,9 +529,11 @@ class RewardsCfg:
         weight=-5e-4,
         params={"sensor_name": "feet_contact", "max_force": 350.0},
     )
+    # Off: under Isaac Lab 2.x the sensor's filters never matched, so this cost was always zero and the policies were
+    # trained without it. Isaac Lab 3.0 measures self-collisions; turning the cost on changes training.
     self_collisions = RewTerm(
         func=mdp.self_collision_cost,
-        weight=-1.0,
+        weight=0.0,
         params={"sensor_name": "self_collision"},
     )
 
@@ -557,6 +569,11 @@ class Asimov1VelocityEnvCfg(ManagerBasedRLEnvCfg):
         self.sim.dt = 0.005
         self.sim.render_interval = self.decimation
         self.sim.physics_material = self.scene.terrain.physics_material
+        # PhysX as in Isaac Lab 2.x, which applied external forces once per step, not every solver iteration.
+        self.sim.physics = PhysxCfg(enable_external_forces_every_iteration=False)
+        # Isaac Lab's own actuator models: the native ones give every environment the maximum delay, not one drawn
+        # between the actuators' min_delay and max_delay.
+        self.sim.use_newton_actuators = False
 
 
 @configclass

@@ -53,7 +53,7 @@ class MotionDataset:
             sel_ids = self.robot.find_joints(self.joint_names, preserve_order=True)[0]
             default_joint_pos = getattr(self.robot.data, "nominal_default_joint_pos", None)
             if default_joint_pos is None:
-                default_joint_pos = self.robot.data.default_joint_pos
+                default_joint_pos = self.robot.data.default_joint_pos.torch
             joint_pos_offset = default_joint_pos[0, sel_ids].detach().cpu().numpy()
 
         file_body_names = None
@@ -119,7 +119,14 @@ class MotionDataset:
             joint_pos_list.append(torch.tensor(joint_pos, dtype=torch.float32))
             joint_vel_list.append(torch.tensor(joint_vel, dtype=torch.float32))
             body_pos_w_list.append(torch.tensor(data["body_pos_w"], dtype=torch.float32))
-            body_quat_w_list.append(torch.tensor(data["body_quat_w"], dtype=torch.float32))
+            body_quat_w = data["body_quat_w"]
+            # Isaac Lab 3.0's math takes quaternions as xyzw; clips recorded with 2.x are wxyz, with or without saying.
+            quat_format = str(data["body_quat_w_format"]) if "body_quat_w_format" in data.files else "wxyz"
+            if quat_format not in ("wxyz", "xyzw"):
+                raise ValueError(f"Unknown body_quat_w_format {quat_format!r} in {f}")
+            if quat_format == "wxyz":
+                body_quat_w = np.roll(body_quat_w, -1, axis=-1)
+            body_quat_w_list.append(torch.tensor(body_quat_w, dtype=torch.float32))
             body_lin_vel_w_list.append(torch.tensor(data["body_lin_vel_w"], dtype=torch.float32))
             body_ang_vel_w_list.append(torch.tensor(data["body_ang_vel_w"], dtype=torch.float32))
 

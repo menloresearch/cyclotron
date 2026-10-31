@@ -541,9 +541,9 @@ stops on the others.
 | `--experiment_name` | Experiment folder under `logs/rsl_rl/`. Defaults to the task's. |
 | `--output` | Folder to write to. Defaults to `<checkpoint folder>/exported`. |
 | `--strict` | Stop instead of asking or warning in [checks](#checks-step-by-step) 7, 10b, 10d and 11: a missing `env.yaml`/`agent.yaml`, policy settings the run didn't save, a changed robot model, and changes to the code of the policy's network. Check 10c, the joints and gains the policy resolves to, stops also without it. |
-| `--device` | Device to run the export on (an AppLauncher flag; the export always runs headless). |
+| `--device` | Device to run the export on (an Isaac Lab launcher flag; the export always runs headless). |
 
-Other than Isaac Lab's AppLauncher flags, nothing else is accepted: setting overrides such as
+Other than Isaac Lab's launcher flags, nothing else is accepted: setting overrides such as
 `env.actions.joint_pos.scale=0.3` are refused, since the run's `env.yaml` and `agent.yaml` are the only source of its
 settings.
 

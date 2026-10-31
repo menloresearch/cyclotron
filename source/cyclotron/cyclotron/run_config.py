@@ -78,6 +78,50 @@ _IGNORED_KEYS = frozenset({"noise", "enable_corruption", "debug_vis", "init_std"
 _NETWORK_KEYS = re.compile(r"agent\.(actor|student)\.(class_name|activation|rnn_type)")
 # A function or class as Isaac Lab writes it, "module.path:name".
 _FUNCTION = re.compile(r"([A-Za-z_][\w.]*):([A-Za-z_]\w*)")
+# Actuator settings Isaac Lab 3.0 renamed: a run saved before it has them under their old names.
+_RENAMED_ACTUATOR_KEYS = {
+    "effort_limit": "actuator_effort_limit",
+    "effort_limit_sim": "joint_effort_limit",
+    "velocity_limit": "actuator_velocity_limit",
+    "velocity_limit_sim": "joint_velocity_limit",
+}
+# Settings Isaac Lab 3.0 and rsl_rl 5.5 added to the compared sections, with the value that does what the code did
+# before them: no observation delay, each term's history kept together, and a clamp on the training distribution's
+# standard deviation that the exported policy never uses. A run saved before them is rebuilt with these values, so
+# they aren't reported as settings the run didn't save.
+_ADDED_WITH_OLD_BEHAVIOUR = {
+    "delay_min_lag": 0,
+    "delay_max_lag": 0,
+    "delay_hold_prob": 1.0,
+    "history_order": "term",
+    "std_range": [1.0e-6, 1.0e6],
+}
+
+
+def _with_current_actuator_names(env: dict) -> dict:
+    """``env`` with each actuator setting under its Isaac Lab 3.0 name, where the new name is unset."""
+    actuators = (((env or {}).get("scene") or {}).get("robot") or {}).get("actuators")
+    if not isinstance(actuators, dict):
+        return env
+    renamed = {}
+    for group, actuator in actuators.items():
+        if isinstance(actuator, dict):
+            actuator = dict(actuator)
+            for old, new in _RENAMED_ACTUATOR_KEYS.items():
+                if old in actuator and (actuator.get(new) is None or actuator.get(old) is None):
+                    value = actuator.pop(old)
+                    if actuator.get(new) is None:
+                        actuator[new] = value
+        renamed[group] = actuator
+    robot = {**env["scene"]["robot"], "actuators": renamed}
+    return {**env, "scene": {**env["scene"], "robot": robot}}
+
+
+def _added_with_old_behaviour(key: str, value) -> bool:
+    """Whether ``key`` is a setting added to the code since a run was saved, at the value that keeps its behaviour."""
+    name = key.rsplit(".", 1)[-1]
+    value = list(value) if isinstance(value, tuple) else value
+    return name in _ADDED_WITH_OLD_BEHAVIOUR and value == _ADDED_WITH_OLD_BEHAVIOUR[name]
 
 
 def _short_names(value):
@@ -133,7 +177,7 @@ def policy_interface(env: dict, agent: dict) -> dict:
     Names are Hydra override paths (``env.actions.joint_pos.scale``). ``env.observations.<group>`` holds the group's
     term names in order. Observation noise is left out too: it only shapes training, and the play tasks turn it off.
     """
-    configs = {"env": env, "agent": agent}
+    configs = {"env": _with_current_actuator_names(env), "agent": agent}
     out = {}
     for path, _ in policy_sections(agent):
         value = lookup(configs, path)
@@ -199,7 +243,7 @@ def interface_differences(saved: dict, current: dict) -> tuple[list[str], list[s
         if _is_term_list(key) or key.startswith(tuple(skipped)):
             continue
         old, new = saved.get(key), current.get(key)
-        if old == new or (_unset(old) and _unset(new)):
+        if old == new or (_unset(old) and (_unset(new) or _added_with_old_behaviour(key, new))):
             continue
         (errors if _NETWORK_KEYS.fullmatch(key) else warnings).append(f"{key}: {_describe(old, new)}")
     return errors, warnings
@@ -219,7 +263,7 @@ def rebuild_differences(saved: tuple[dict, dict], env_cfg: dict, agent_cfg: dict
     mismatches, new = [], []
     for key in dict.fromkeys([*before, *after]):
         old, value = before.get(key), after.get(key)
-        if old == value or (_unset(old) and _unset(value)):
+        if old == value or (_unset(old) and (_unset(value) or _added_with_old_behaviour(key, value))):
             continue
         (mismatches if key in before else new).append(f"{key}: {_describe(old, value)}")
     return mismatches, new
@@ -377,7 +421,8 @@ class _Restorer:
         except (ImportError, AttributeError):
             found = None
         if found is not None:
-            return saved if isinstance(current, str) else found
+            # In the code's kind of value: Isaac Lab 3.0 holds callables as strings that resolve when called.
+            return type(current)(saved) if isinstance(current, str) else found
         current_name = current.split(":")[-1] if isinstance(current, str) else getattr(current, "__name__", None)
         if current_name == attr:
             # Moved or renamed since training, e.g. from the package's old name isaac_asimov.
@@ -394,6 +439,7 @@ def restore_policy_settings(env_cfg, agent_cfg, saved_env: dict, saved_agent: di
     no longer build the run's policy.
     """
     restore = _Restorer()
+    saved_env = _with_current_actuator_names(saved_env)
     saved_configs, configs = {"env": saved_env, "agent": saved_agent}, {"env": env_cfg, "agent": agent_cfg}
     for path, holds_terms in policy_sections(saved_agent):
         saved = lookup(saved_configs, path, _MISSING)

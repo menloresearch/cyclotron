@@ -12,8 +12,8 @@ class HeadingHoldVelocityCommand(UniformVelocityCommand):
     """Hold a moving command's initial heading across consecutive resamples."""
 
     def reset(self, env_ids: Sequence[int] | None = None) -> dict[str, float]:
-        if env_ids is None:
-            env_ids = torch.arange(self.num_envs, device=self.device)
+        # None or a slice when every environment is reset.
+        env_ids = torch.arange(self.num_envs, device=self.device)[slice(None) if env_ids is None else env_ids]
         self.is_heading_env[env_ids] = False
         return super().reset(env_ids)
 
@@ -27,7 +27,7 @@ class HeadingHoldVelocityCommand(UniformVelocityCommand):
         super()._resample_command(env_ids)
         if self.cfg.heading_command and len(env_ids):
             continuing = previous_heading & ~previous_standing & self.is_heading_env[env_ids]
-            current_heading = self.robot.data.heading_w[env_ids]
+            current_heading = self.robot.data.heading_w.torch[env_ids]
             self.heading_target[env_ids] = torch.where(continuing, previous_target, current_heading)
 
 

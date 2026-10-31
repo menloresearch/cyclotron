@@ -80,6 +80,24 @@ Export and play load only the policy from the checkpoint. The critic and the
 AMP discriminator are only used in training, so a run whose critic saw extra
 privileged inputs still exports and plays.
 
+### Runs trained on Isaac Lab 2.x
+
+Cyclotron moved from Isaac Lab 2.3 (Isaac Sim 5.1, rsl_rl 5.0.1) to Isaac Lab
+3.0 (Isaac Sim 6.2, rsl_rl 5.5.1). Runs trained before still play and export:
+
+- actuator limits saved under their Isaac Lab 2.x names (`effort_limit`,
+  `effort_limit_sim`, `velocity_limit`, `velocity_limit_sim`) are read as the
+  3.0 ones (`actuator_effort_limit`, `joint_effort_limit`, ...);
+- settings Isaac Lab 3.0 and rsl_rl 5.5 added to the compared sections are not
+  reported as settings the run didn't save while they keep the old behaviour:
+  no observation delay (`delay_min_lag`, `delay_max_lag`, `delay_hold_prob`),
+  each term's history kept together (`history_order: term`), and the clamp on
+  the training distribution's standard deviation (`std_range`);
+- the network code check reports rsl_rl's `models` and `modules` as changed.
+  That is a warning, so `--export` and `--play` go ahead, and the exported
+  files are still checked against the checkpoint; `--strict`, and therefore
+  `--share`, stop, so share such a run from the commit it was trained with.
+
 ## The robot model
 
 Export and play simulate the robot model the run was trained with, not

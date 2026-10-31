@@ -7,15 +7,35 @@
 
 
 import argparse
+import os
 import sys
 
-from isaaclab.app import AppLauncher
+from isaaclab.app import launch_simulation
+from isaaclab.utils.dict import class_to_dict
+from isaaclab_rl.entrypoints.common import (
+    add_video_args,
+    apply_video_recording,
+    close_env,
+    create_isaaclab_env,
+    enable_cameras_for_video,
+    pre_launch_video_config,
+    run_playback,
+    set_hydra_args,
+)
+from isaaclab_rl.rsl_rl import RslRlVecEnvWrapper, create_rsl_rl_runner, handle_deprecated_rsl_rl_cfg
+from isaaclab_rl.utils.pretrained_checkpoint import get_published_pretrained_checkpoint
+from isaaclab_tasks.utils import resolve_task_config, setup_preset_cli
+
+import cyclotron.tasks  # noqa: F401
+from cyclotron.code_state import check_out_hint, describe_changes
+from cyclotron.policy_io import resolve_policy_io
+from cyclotron.policy_loading import load_policy
+from cyclotron.robot_model import load_training_robot_model, overrides_robot_model
 
 import cli_args  # isort: skip
 
 parser = argparse.ArgumentParser(description="Train an RL agent with RSL-RL.")
-parser.add_argument("--video", action="store_true", default=False, help="Record videos during training.")
-parser.add_argument("--video_length", type=int, default=200, help="Length of the recorded video (in steps).")
+add_video_args(parser, action="play")
 parser.add_argument(
     "--disable_fabric", action="store_true", default=False, help="Disable fabric and use USD I/O operations."
 )
@@ -43,8 +63,8 @@ parser.add_argument(
     help="Simulate the robot model the current code loads, instead of the one the run was trained with.",
 )
 cli_args.add_rsl_rl_args(parser)
-AppLauncher.add_app_launcher_args(parser)
-args_cli, hydra_args = parser.parse_known_args()
+cli_args.add_launcher_args(parser)
+args_cli, hydra_args = setup_preset_cli(parser)
 # Unknown flags go to Hydra, which would only reject these after Isaac Sim has started.
 REMOVED_EXPORT_FLAGS = (
     "--export-only",
@@ -59,52 +79,17 @@ if removed:
     sys.exit(f"[ERROR] {removed[0]} was removed from --play, which no longer writes ONNX. Use ./cyclotron.sh --export.")
 if args_cli.target and not args_cli.checkpoint:
     args_cli.checkpoint = args_cli.target
-if args_cli.video:
-    args_cli.enable_cameras = True
-
-sys.argv = [sys.argv[0]] + hydra_args
-
-app_launcher = AppLauncher(args_cli)
-simulation_app = app_launcher.app
+# Isaac Lab 3.0 runs headless unless a visualizer is requested; play opens the Isaac Sim viewport as it did in 2.x.
+if args_cli.visualizer is None and not args_cli.headless:
+    args_cli.visualizer = ["kit"]
+args_cli.frontend = "torch"
+enable_cameras_for_video(args_cli)
+set_hydra_args(hydra_args)
 
 
 import importlib.metadata as metadata
 
-from packaging import version
-
 installed_version = metadata.version("rsl-rl-lib")
-
-
-import os
-import time
-
-import gymnasium as gym
-import torch
-from rsl_rl.runners import DistillationRunner, OnPolicyRunner
-
-import isaaclab_tasks  # noqa: F401
-from isaaclab.envs import (
-    DirectMARLEnv,
-    DirectMARLEnvCfg,
-    DirectRLEnvCfg,
-    ManagerBasedRLEnvCfg,
-    multi_agent_to_single_agent,
-)
-from isaaclab.utils.dict import class_to_dict, print_dict
-from isaaclab_rl.rsl_rl import (
-    RslRlBaseRunnerCfg,
-    RslRlVecEnvWrapper,
-    handle_deprecated_rsl_rl_cfg,
-    handle_deprecated_rsl_rl_checkpoint,
-)
-from isaaclab_rl.utils.pretrained_checkpoint import get_published_pretrained_checkpoint
-from isaaclab_tasks.utils.hydra import hydra_task_config
-
-import cyclotron.tasks  # noqa: F401
-from cyclotron.code_state import check_out_hint, describe_changes
-from cyclotron.policy_io import resolve_policy_io
-from cyclotron.policy_loading import load_policy
-from cyclotron.robot_model import load_training_robot_model, overrides_robot_model
 
 CODE_CHANGE_CONSEQUENCE = (
     "--play runs the checkpoint in an environment built from the current code, so it may behave differently than in"
@@ -112,18 +97,26 @@ CODE_CHANGE_CONSEQUENCE = (
 )
 
 
-@hydra_task_config(args_cli.task, args_cli.agent)
-def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agent_cfg: RslRlBaseRunnerCfg):
+def main():
+    env_cfg, agent_cfg = resolve_task_config(args_cli.task, args_cli.agent)
+    pre_launch_video_config(env_cfg, args_cli)
+    with launch_simulation(env_cfg, args_cli):
+        play(env_cfg, agent_cfg)
+
+
+def play(env_cfg, agent_cfg):
     task_name = args_cli.task.split(":")[-1]
     train_task_name = task_name.replace("-Play", "")
 
-    agent_cfg: RslRlBaseRunnerCfg = cli_args.update_rsl_rl_cfg(agent_cfg, args_cli)
+    agent_cfg = cli_args.update_rsl_rl_cfg(agent_cfg, args_cli)
     env_cfg.scene.num_envs = args_cli.num_envs if args_cli.num_envs is not None else env_cfg.scene.num_envs
 
     agent_cfg = handle_deprecated_rsl_rl_cfg(agent_cfg, installed_version)
 
     env_cfg.seed = agent_cfg.seed
     env_cfg.sim.device = args_cli.device if args_cli.device is not None else env_cfg.sim.device
+    if args_cli.disable_fabric:
+        env_cfg.sim.use_fabric = False
 
     log_root_path = os.path.join("logs", "rsl_rl", agent_cfg.experiment_name)
     log_root_path = os.path.abspath(log_root_path)
@@ -139,6 +132,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     log_dir = os.path.dirname(resume_path)
 
     env_cfg.log_dir = log_dir
+    apply_video_recording(env_cfg, log_dir, args_cli, subdir="play", checkpoint_path=resume_path)
     robot_note = None
     # Like --current_robot_model, a urdf named by a Hydra override is loaded as it is.
     if not args_cli.current_robot_model and not overrides_robot_model(hydra_args):
@@ -146,7 +140,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         if robot_loaded:
             print(f"[INFO] {robot_loaded}")
 
-    env = gym.make(args_cli.task, cfg=env_cfg, render_mode="rgb_array" if args_cli.video else None)
+    env = create_isaaclab_env(args_cli.task, env_cfg, args_cli, convert_marl_to_single_agent=False)
     # Compared where train.py saves params/: after the environment is created, which resolves parts of the config.
     agent_dict = class_to_dict(agent_cfg)
     changes, level = describe_changes(
@@ -159,79 +153,38 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     )
     print(changes)
     if level == "error":
-        env.close()
+        close_env(env)
         sys.exit(1)
     if level == "warning" and args_cli.strict:
         # Isaac Sim replaces sys.exit with a version that only takes an exit code, so the message is printed first.
         print("[ERROR] Stopped by --strict: the code changed since the run was trained (see above).")
-        env.close()
+        close_env(env)
         sys.exit(1)
-
-    if isinstance(env.unwrapped, DirectMARLEnv):
-        env = multi_agent_to_single_agent(env)
-
-    if args_cli.video:
-        video_kwargs = {
-            "video_folder": os.path.join(log_dir, "videos", "play"),
-            "step_trigger": lambda step: step == 0,
-            "video_length": args_cli.video_length,
-            "disable_logger": True,
-        }
-        print("[INFO] Recording videos during training.")
-        print_dict(video_kwargs, nesting=4)
-        env = gym.wrappers.RecordVideo(env, **video_kwargs)
 
     env = RslRlVecEnvWrapper(env, clip_actions=agent_cfg.clip_actions)
 
     print(f"[INFO]: Loading model checkpoint from: {resume_path}")
-    if agent_cfg.class_name == "OnPolicyRunner":
-        runner = OnPolicyRunner(env, agent_cfg.to_dict(), log_dir=None, device=agent_cfg.device)
-    elif agent_cfg.class_name == "DistillationRunner":
-        runner = DistillationRunner(env, agent_cfg.to_dict(), log_dir=None, device=agent_cfg.device)
-    else:
-        raise ValueError(f"Unsupported runner class: {agent_cfg.class_name}")
-    resume_path = handle_deprecated_rsl_rl_checkpoint(resume_path, installed_version)
+    runner = create_rsl_rl_runner(env, agent_cfg)
     try:
         load_policy(runner, resume_path, agent_cfg.class_name, check_out_hint(log_dir))
     except ValueError as error:
         print(f"[ERROR] {error}")
-        env.close()
+        close_env(env)
         sys.exit(1)
 
     policy = runner.get_inference_policy(device=env.unwrapped.device)
 
-    # Older RSL-RL versions reset the policy network itself between episodes.
-    if version.parse(installed_version) < version.parse("4.0.0"):
-        if version.parse(installed_version) >= version.parse("2.3.0"):
-            policy_nn = runner.alg.policy
-        else:
-            policy_nn = runner.alg.actor_critic
-
-    dt = env.unwrapped.step_dt
-
     obs = env.get_observations()
-    timestep = 0
-    while simulation_app.is_running():
-        start_time = time.time()
-        with torch.inference_mode():
-            actions = policy(obs)
-            obs, _, dones, _ = env.step(actions)
-            if version.parse(installed_version) >= version.parse("4.0.0"):
-                policy.reset(dones)
-            else:
-                policy_nn.reset(dones)
-        if args_cli.video:
-            timestep += 1
-            if timestep == args_cli.video_length:
-                break
 
-        sleep_time = dt - (time.time() - start_time)
-        if args_cli.real_time and sleep_time > 0:
-            time.sleep(sleep_time)
+    def step() -> None:
+        nonlocal obs
+        obs, _, dones, _ = env.step(policy(obs))
+        policy.reset(dones)
 
-    env.close()
+    run_playback(step, dt=env.unwrapped.step_dt, args_cli=args_cli, env_cfg=env_cfg)
+
+    close_env(env)
 
 
 if __name__ == "__main__":
     main()
-    simulation_app.close()

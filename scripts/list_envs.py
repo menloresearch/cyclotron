@@ -2,17 +2,13 @@
 
 import argparse
 
-from isaaclab.app import AppLauncher
-
 parser = argparse.ArgumentParser(description="List Cyclotron environments.")
 parser.add_argument("--keyword", type=str, default=None, help="Optional task-name filter.")
 args_cli = parser.parse_args()
 
-app_launcher = AppLauncher(headless=True)
-simulation_app = app_launcher.app
-
 import gymnasium as gym
 
+# Registering the tasks reads no config and needs no Isaac Sim.
 import cyclotron.tasks  # noqa: F401, E402
 
 
@@ -27,7 +23,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    try:
-        main()
-    finally:
-        simulation_app.close()
+    main()

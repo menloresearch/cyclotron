@@ -64,8 +64,11 @@ Every flag of `scripts/rsl_rl/train.py`, all optional:
 | `--export_io_descriptors` | Export the environment's IO descriptors alongside the run. |
 | `--ray-proc-id <n>` | Set automatically by the Ray integration; leave it alone. |
 
-`--headless` and `--device` come from Isaac Lab's `AppLauncher`, which adds
-further simulator flags; `./cyclotron.sh --train --help` lists them all.
+`--device` and the other simulator flags come from Isaac Lab's launcher;
+`./cyclotron.sh --train --help` lists them all. Isaac Lab 3.0 runs headless
+unless a visualizer is requested with `--viz` (for example `--viz kit` to watch
+training); `--headless` is kept, so commands written for earlier versions run
+unchanged.
 
 ### Hydra overrides
 
