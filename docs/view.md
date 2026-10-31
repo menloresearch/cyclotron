@@ -151,11 +151,14 @@ wrongly is refused, naming the difference, and `--view` warns about it before
 the server starts:
 
 - an observation term the viewer can't compute, such as base linear velocity,
-  foot contacts or a height scan, or a term with `clip` or `modifiers` set
+  foot contacts or a height scan, or a term with `clip` or `modifiers` set, or
+  delayed (Isaac Lab 3.0's `delay_max_lag` above 0)
 - a policy trained at another rate than 50 Hz (`sim.dt` x `decimation` in
   `env.yaml`)
 - actions sent to the joints in another order, without `preserve_order` or
-  `use_default_offset`, or clipped
+  `use_default_offset`, or with an `actions.joint_pos.clip` the viewer can't
+  apply as in training (it applies a per-joint clip like Asimov 1's ankle-roll
+  clip)
 
 The viewer's
 [supported policies](https://github.com/menloresearch/humanoid-policy-viewer/blob/main/docs/huggingface.md#supported-policies)
