@@ -90,6 +90,11 @@ remaining RSL-RL flags (`--run_name`, `--resume`, `--logger`,
 `--log_project_name`) are accepted for config compatibility but matter for
 `--train`, not here.
 
+`--play` simulates with PhysX unless `physics=newton_mjwarp` is given, whichever
+engine trained the run (its `env.yaml` names it under
+`sim.physics.class_type`). Pass the same `physics=` the run was trained with to
+see it as trained; the other engine is a sim2sim check.
+
 Unknown flags are passed to Hydra as config overrides, so a trained value a
 code-change warning names (for example
 `env.observations.policy.base_ang_vel.scale=0.25`) can be passed back on the
