@@ -130,13 +130,16 @@ class angular_momentum_penalty(ManagerTermBase):
         self,
         env: ManagerBasedRLEnv,
         asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
+        mass_event_name: str | None = None,
     ) -> torch.Tensor:
         asset: Articulation = env.scene[asset_cfg.name]
         pos = asset.data.body_com_pos_w
         vel = asset.data.body_com_lin_vel_w
-        m = self._masses.unsqueeze(-1)
-        com = (m * pos).sum(dim=1) / self._total_mass
-        com_vel = (m * vel).sum(dim=1) / self._total_mass
+        masses = self._masses if mass_event_name is None else env.event_manager.get_term_cfg(mass_event_name).func.body_mass
+        total_mass = masses.sum(dim=1, keepdim=True)
+        m = masses.unsqueeze(-1)
+        com = (m * pos).sum(dim=1) / total_mass
+        com_vel = (m * vel).sum(dim=1) / total_mass
         r = pos - com.unsqueeze(1)
         v = vel - com_vel.unsqueeze(1)
         angmom = (m * torch.cross(r, v, dim=-1)).sum(dim=1)

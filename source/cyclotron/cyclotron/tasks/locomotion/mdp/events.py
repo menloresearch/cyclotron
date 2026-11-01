@@ -95,11 +95,22 @@ class randomize_upper_body_motion(ManagerTermBase):
         asset_cfg = cfg.params["asset_cfg"]
         self.asset = env.scene[asset_cfg.name]
         self.joint_ids = torch.arange(self.asset.num_joints, device=self.asset.device)[asset_cfg.joint_ids]
+        names = [self.asset.joint_names[i] for i in self.joint_ids.tolist()]
         self.sampler = UpperBodyMotionSampler(
-            [self.asset.joint_names[i] for i in self.joint_ids.tolist()],
+            names,
             self.asset.data.default_joint_pos[:, self.joint_ids],
             self.asset.data.soft_joint_pos_limits[:, self.joint_ids],
             **cfg.params["motion_config"],
+        )
+        carrying_config = cfg.params.get("carrying_motion_config")
+        self.carry_sampler = (
+            UpperBodyMotionSampler(
+                names,
+                self.asset.data.default_joint_pos[:, self.joint_ids],
+                self.asset.data.soft_joint_pos_limits[:, self.joint_ids],
+                **carrying_config,
+            )
+            if carrying_config is not None else None
         )
         self.reset()
 
@@ -108,9 +119,31 @@ class randomize_upper_body_motion(ManagerTermBase):
         current = self.asset.data.joint_pos[ids[:, None], self.joint_ids]
         defaults = self.asset.data.default_joint_pos[ids[:, None], self.joint_ids]
         self.sampler.reset(ids, current, defaults)
+        if self.carry_sampler is not None:
+            self.carry_sampler.reset(ids, current, defaults)
         self.asset.set_joint_position_target(current, joint_ids=self.joint_ids, env_ids=ids)
 
-    def __call__(self, env: ManagerBasedEnv, env_ids, asset_cfg: SceneEntityCfg, motion_config: dict):
+    def __call__(
+        self, env: ManagerBasedEnv, env_ids, asset_cfg: SceneEntityCfg, motion_config: dict,
+        carrying_motion_config: dict | None = None, payload_event_name: str = "hand_payload",
+    ):
         ids = self.sampler._ids(env_ids)
-        targets = self.sampler.advance(env.step_dt, ids)
-        self.asset.set_joint_position_target(targets, joint_ids=self.joint_ids, env_ids=ids)
+        if self.carry_sampler is None:
+            targets = self.sampler.advance(env.step_dt, ids)
+            self.asset.set_joint_position_target(targets, joint_ids=self.joint_ids, env_ids=ids)
+            return
+        payload = env.event_manager.get_term_cfg(payload_event_name).func
+        loaded = payload.mass[ids].sum(dim=-1) > 0
+        for sampler, selected in ((self.sampler, ids[~loaded]), (self.carry_sampler, ids[loaded])):
+            if len(selected):
+                sampler.goal_scale[selected] = payload.difficulty[selected]
+                targets = sampler.advance(env.step_dt, selected)
+                self.asset.set_joint_position_target(targets, joint_ids=self.joint_ids, env_ids=selected)
+        env.extras.setdefault("log", {}).update({
+            "Metrics/payload_kg": payload.mass.sum(dim=-1).mean(),
+            "Metrics/loaded_fraction": (payload.mass.sum(dim=-1) > 0).float().mean(),
+            "Metrics/payload_difficulty": payload.difficulty.mean(),
+            "Metrics/torque_saturation_fraction": (
+                self.asset.data.computed_torque.abs() > self.asset.data.applied_torque.abs() + 1e-4
+            ).float().mean(),
+        })

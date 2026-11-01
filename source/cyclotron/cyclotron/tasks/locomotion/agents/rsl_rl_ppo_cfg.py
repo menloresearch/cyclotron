@@ -145,3 +145,11 @@ class Asimov1LowerBody27DofAMPRunnerCfg(Asimov1AMPRunnerCfg):
         super().__post_init__()
         self.algorithm.amp_data.joint_names = list(ASIMOV_1_LOWER_BODY_JOINT_NAMES)
         self.algorithm.amp_data.body_names = ["left_ankle_roll_link", "right_ankle_roll_link"]
+
+
+@configclass
+class Asimov1LowerBody27DofPayloadAMPRunnerCfg(Asimov1LowerBody27DofAMPRunnerCfg):
+    """The 27-DOF lower-body runner, logged separately for the two-hand payload task."""
+
+    experiment_name = "asimov_velocity_lower_body_27dof_payload_amp"
+    run_name = "lower_body_27dof_payload_amp"
