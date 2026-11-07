@@ -6,6 +6,7 @@
 
 import math
 
+from isaaclab_newton.physics import MJWarpSolverCfg, NewtonCfg, NewtonCollisionPipelineCfg, NewtonShapeCfg
 from isaaclab_physx.physics import PhysxCfg
 
 import isaaclab.sim as sim_utils
@@ -23,6 +24,7 @@ from isaaclab.sensors import ContactSensorCfg
 from isaaclab.terrains import TerrainImporterCfg
 from isaaclab.utils import configclass
 from isaaclab.utils.noise import UniformNoiseCfg as Unoise
+from isaaclab_tasks.utils import PresetCfg
 
 from cyclotron.assets.robots.asimov_1 import (
     ASIMOV_1_ACTION_SCALE,
@@ -92,6 +94,33 @@ def _slot_cfg(names: tuple[str, ...]) -> SceneEntityCfg:
 
 def _feet_cfg() -> SceneEntityCfg:
     return SceneEntityCfg("robot", body_names=list(FEET_BODIES), preserve_order=True)
+
+
+# Physics
+
+
+@configclass
+class PhysicsCfg(PresetCfg):
+    """The physics engines a run can pick with ``physics=<name>``; PhysX unless one is named."""
+
+    # PhysX as in Isaac Lab 2.x, which applied external forces once per step, not every solver iteration.
+    isaacsim_physx = PhysxCfg(enable_external_forces_every_iteration=False)
+    # MuJoCo Warp, with the settings of Isaac Lab's own velocity tasks.
+    newton_mjwarp = NewtonCfg(
+        solver_cfg=MJWarpSolverCfg(
+            njmax=1000,
+            nconmax=300,
+            cone="pyramidal",
+            impratio=1.0,
+            integrator="implicitfast",
+            use_mujoco_contacts=False,
+        ),
+        collision_cfg=NewtonCollisionPipelineCfg(max_triangle_pairs=2_500_000),
+        num_substeps=2,
+        debug_mode=False,
+        default_shape_cfg=NewtonShapeCfg(margin=0.0, ke=160000.0, kd=1100.0),
+    )
+    default = isaacsim_physx
 
 
 # Scene
@@ -569,8 +598,7 @@ class Asimov1VelocityEnvCfg(ManagerBasedRLEnvCfg):
         self.sim.dt = 0.005
         self.sim.render_interval = self.decimation
         self.sim.physics_material = self.scene.terrain.physics_material
-        # PhysX as in Isaac Lab 2.x, which applied external forces once per step, not every solver iteration.
-        self.sim.physics = PhysxCfg(enable_external_forces_every_iteration=False)
+        self.sim.physics = PhysicsCfg()
         # Isaac Lab's own actuator models: the native ones give every environment the maximum delay, not one drawn
         # between the actuators' min_delay and max_delay.
         self.sim.use_newton_actuators = False

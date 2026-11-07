@@ -115,7 +115,8 @@ Use this code to replicate the training run for our baseline policy using a sing
 ```
 
 Useful flags: `--max_iterations <n>`, `--seed <n>`, `--video` (record rollout
-clips during training).
+clips during training), `physics=newton_mjwarp` (train with MuJoCo Warp instead
+of PhysX; see [Physics engine](docs/train.md#physics-engine)).
 
 Training prints the run directory and a command to resume the run from its
 latest checkpoint, at the start and again when training ends or is
