@@ -12,9 +12,9 @@ from isaaclab.actuators import DelayedPDActuatorCfg
 from isaaclab.assets.articulation import ArticulationCfg
 
 _REPOSITORY_ROOT = Path(__file__).resolve().parents[5]
-ASIMOV_1_MODEL_DIR = str(_REPOSITORY_ROOT / "third_party" / "asimov-1" / "sim-model")
+ASIMOV_1_MODEL_DIR = str(_REPOSITORY_ROOT / "third_party" / "asimov-1" / "sim-model" / "asimov_1_25dof")
 ASIMOV_1_URDF_PATH = str(
-    Path(os.environ.get("ASIMOV_1_MODEL_DIR", ASIMOV_1_MODEL_DIR)).expanduser() / "urdf" / "asimov_1.urdf"
+    Path(os.environ.get("ASIMOV_1_MODEL_DIR", ASIMOV_1_MODEL_DIR)).expanduser() / "urdf" / "asimov_1_25dof.urdf"
 )
 
 
@@ -56,7 +56,7 @@ ASIMOV_1_ACTUATORS = {
         stiffness=150.0,
         damping=5.0,
         effort_limit=45.0,
-        armature=0.0698,
+        armature=0.065029375,
         friction=0.70,
         min_delay=DELAY_MIN_LAG,
         max_delay=DELAY_MAX_LAG,
@@ -66,7 +66,7 @@ ASIMOV_1_ACTUATORS = {
         stiffness=150.0,
         damping=5.0,
         effort_limit=45.0,
-        armature=0.1400,
+        armature=0.140000000,
         friction=0.20,
         min_delay=DELAY_MIN_LAG,
         max_delay=DELAY_MAX_LAG,
@@ -76,7 +76,7 @@ ASIMOV_1_ACTUATORS = {
         stiffness=150.0,
         damping=5.0,
         effort_limit=28.0,
-        armature=0.0687,
+        armature=0.068694000,
         friction=0.70,
         min_delay=DELAY_MIN_LAG,
         max_delay=DELAY_MAX_LAG,
@@ -86,7 +86,7 @@ ASIMOV_1_ACTUATORS = {
         stiffness=150.0,
         damping=5.0,
         effort_limit=45.0,
-        armature=0.0330,
+        armature=0.032630688,
         friction=0.70,
         min_delay=DELAY_MIN_LAG,
         max_delay=DELAY_MAX_LAG,
@@ -116,7 +116,7 @@ ASIMOV_1_ACTUATORS = {
         stiffness=65.0,
         damping=5.0,
         effort_limit=40.0,
-        armature=0.0698,
+        armature=0.065029375,
         friction=0.70,
         min_delay=DELAY_MIN_LAG,
         max_delay=DELAY_MAX_LAG,
@@ -126,7 +126,7 @@ ASIMOV_1_ACTUATORS = {
         stiffness=57.0,
         damping=5.0,
         effort_limit=30.0,
-        armature=0.1400,
+        armature=0.140000000,
         friction=0.20,
         min_delay=DELAY_MIN_LAG,
         max_delay=DELAY_MAX_LAG,
@@ -136,7 +136,7 @@ ASIMOV_1_ACTUATORS = {
         stiffness=86.0,
         damping=5.0,
         effort_limit=25.0,
-        armature=0.0330,
+        armature=0.032630688,
         friction=0.70,
         min_delay=DELAY_MIN_LAG,
         max_delay=DELAY_MAX_LAG,
@@ -146,17 +146,18 @@ ASIMOV_1_ACTUATORS = {
         stiffness=96.0,
         damping=5.0,
         effort_limit=20.0,
-        armature=0.0687,
+        armature=0.068694000,
         friction=0.70,
         min_delay=DELAY_MIN_LAG,
         max_delay=DELAY_MAX_LAG,
     ),
+    # The neck isn't in the action space; it shares the elbow/wrist actuator so it is PD-held at its default.
     "elbow_wrist": DelayedPDActuatorCfg(
-        joint_names_expr=[".*_elbow_joint", ".*_wrist_yaw_joint"],
+        joint_names_expr=[".*_elbow_joint", ".*_wrist_yaw_joint", "neck_yaw_joint", "neck_pitch_joint"],
         stiffness=40.0,
         damping=2.0,
         effort_limit=12.0,
-        armature=0.0242,
+        armature=0.024099120,
         friction=0.40,
         min_delay=DELAY_MIN_LAG,
         max_delay=DELAY_MAX_LAG,
@@ -165,7 +166,7 @@ ASIMOV_1_ACTUATORS = {
 
 
 ASIMOV_1_STANDING_INIT_STATE = ArticulationCfg.InitialStateCfg(
-    pos=(0.0, 0.0, 0.639),
+    pos=(0.0, 0.0, 0.71),
     joint_pos={
         "left_hip_pitch_joint": -0.15,
         "right_hip_pitch_joint": 0.15,
@@ -182,9 +183,11 @@ ASIMOV_1_STANDING_INIT_STATE = ArticulationCfg.InitialStateCfg(
         "left_shoulder_roll_joint": -0.05,
         "right_shoulder_roll_joint": 0.05,
         ".*_shoulder_yaw_joint": 0.0,
-        "left_elbow_joint": 0.40,
-        "right_elbow_joint": -0.40,
+        "left_elbow_joint": 1.0,
+        "right_elbow_joint": -1.0,
         ".*_wrist_yaw_joint": 0.0,
+        "neck_yaw_joint": 0.0,
+        "neck_pitch_joint": 0.0,
     },
     joint_vel={".*": 0.0},
 )
@@ -194,7 +197,8 @@ ASIMOV_1_DELAYED_CFG = ArticulationCfg(
     spawn=sim_utils.UrdfFileCfg(
         asset_path=ASIMOV_1_URDF_PATH,
         fix_base=False,
-        merge_fixed_joints=True,
+        # Keeps imu_link (the only fixed joint's child) a body of its own, for the IMU sensor to sit on.
+        merge_fixed_joints=False,
         joint_drive=sim_utils.UrdfFileCfg.JointDriveCfg(
             target_type="position",
             gains=sim_utils.UrdfFileCfg.JointDriveCfg.PDGainsCfg(stiffness=0.0, damping=0.0),

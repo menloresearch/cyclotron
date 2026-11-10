@@ -76,6 +76,8 @@ class delayed_obs(ManagerTermBase):
     _QUANTITIES = {
         "base_ang_vel": base_mdp.base_ang_vel,
         "projected_gravity": base_mdp.projected_gravity,
+        "imu_ang_vel": base_mdp.imu_ang_vel,
+        "imu_projected_gravity": base_mdp.imu_projected_gravity,
     }
 
     def __init__(self, cfg: ObservationTermCfg, env: ManagerBasedRLEnv):

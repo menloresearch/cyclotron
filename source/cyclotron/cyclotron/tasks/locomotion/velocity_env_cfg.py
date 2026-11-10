@@ -17,7 +17,7 @@ from isaaclab.managers import RewardTermCfg as RewTerm
 from isaaclab.managers import SceneEntityCfg
 from isaaclab.managers import TerminationTermCfg as DoneTerm
 from isaaclab.scene import InteractiveSceneCfg
-from isaaclab.sensors import ContactSensorCfg
+from isaaclab.sensors import ContactSensorCfg, ImuCfg
 from isaaclab.terrains import TerrainImporterCfg
 from isaaclab.utils import configclass
 from isaaclab.utils.noise import AdditiveUniformNoiseCfg as Unoise
@@ -72,6 +72,8 @@ SLOT_4_5 = (
 
 FEET_BODIES = ["left_ankle_roll_link", "right_ankle_roll_link"]
 TORSO_BODY = "waist_yaw_link"
+# The urdf link the IMU sits at; the policy's and critic's gyro and gravity readings are taken in its frame.
+IMU_LINK = "imu_link"
 
 POSE_JOINT_PATTERNS = (
     ".*_hip_pitch_joint", ".*_hip_roll_joint", ".*_hip_yaw_joint",
@@ -113,6 +115,7 @@ class Asimov1SceneCfg(InteractiveSceneCfg):
 
     robot: ArticulationCfg = ASIMOV_1_DELAYED_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
 
+    imu = ImuCfg(prim_path="{ENV_REGEX_NS}/Robot/" + IMU_LINK)
     feet_contact = ContactSensorCfg(
         prim_path="{ENV_REGEX_NS}/Robot/.*_ankle_roll_link",
         history_length=3,
@@ -186,13 +189,13 @@ class ObservationsCfg:
 
         base_ang_vel = ObsTerm(
             func=mdp.delayed_obs,
-            params={"quantity": "base_ang_vel", "min_lag": 0, "max_lag": 1},
+            params={"quantity": "imu_ang_vel", "min_lag": 0, "max_lag": 1},
             noise=Unoise(n_min=-0.01, n_max=0.01),
             scale=0.25,
         )
         projected_gravity = ObsTerm(
             func=mdp.delayed_obs,
-            params={"quantity": "projected_gravity", "min_lag": 0, "max_lag": 2},
+            params={"quantity": "imu_projected_gravity", "min_lag": 0, "max_lag": 2},
             noise=Unoise(n_min=-0.02, n_max=0.02),
         )
         command = ObsTerm(func=mdp.generated_commands, params={"command_name": "twist"})
@@ -241,8 +244,8 @@ class ObservationsCfg:
     @configclass
     class CriticCfg(ObsGroup):
 
-        base_ang_vel = ObsTerm(func=mdp.base_ang_vel, scale=0.25)
-        projected_gravity = ObsTerm(func=mdp.projected_gravity)
+        base_ang_vel = ObsTerm(func=mdp.imu_ang_vel, scale=0.25)
+        projected_gravity = ObsTerm(func=mdp.imu_projected_gravity)
         command = ObsTerm(func=mdp.generated_commands, params={"command_name": "twist"})
         joint_pos_slot01 = ObsTerm(
             func=mdp.joint_pos_rel, params={"asset_cfg": _slot_cfg(SLOT_0_1)}, scale=1.0
@@ -306,6 +309,16 @@ class EventCfg:
         params={
             "ranges": (-0.02, 0.02),
             "asset_cfg": SceneEntityCfg("robot", joint_names=[".*"]),
+        },
+    )
+    # imu_link has no inertial in the urdf, so the importer gives it 1 kg; the board's few grams are already in the torso.
+    imu_link_mass = EventTerm(
+        func=mdp.randomize_rigid_body_mass,
+        mode="startup",
+        params={
+            "asset_cfg": SceneEntityCfg("robot", body_names=[IMU_LINK]),
+            "mass_distribution_params": (1e-3, 1e-3),
+            "operation": "abs",
         },
     )
     base_com = EventTerm(
