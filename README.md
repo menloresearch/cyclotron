@@ -1,8 +1,12 @@
 # Cyclotron
 
-<p align="center">
-  <img src="docs/assets/asimov-sim2real.webp" alt="Asimov 1 walking in simulation (left) and on the real robot (right)" width="640">
-</p>
+<div align="center">
+
+| <div align="center">Isaac Lab</div> | <div align="center">Real deployment</div> |
+| :---: | :---: |
+| [<img src="https://static.asimov.inc/asimov_1_walking_sim.gif" width="400px" alt="Asimov 1 walking in Isaac Lab">](https://static.asimov.inc/asimov_1_walking_sim.gif) | [<img src="https://static.asimov.inc/asimov_1_walking_real.gif" width="400px" alt="Asimov 1 walking in the physical world">](https://static.asimov.inc/asimov_1_walking_real.gif) |
+
+</div>
 
 Asimov 1 is an open-source humanoid robot developed by
 [Menlo Research](https://menlo.ai/). This repository provides the
@@ -14,6 +18,7 @@ Get your own Asimov 1.
 
 This repo is a standalone Isaac Lab extension for training Asimov-1 locomotion policies with
 PPO and adversarial motion priors (AMP).
+
 
 ## Quick Install
 
