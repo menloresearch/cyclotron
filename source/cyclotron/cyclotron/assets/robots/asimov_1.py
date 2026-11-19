@@ -11,6 +11,9 @@ import isaaclab.sim as sim_utils
 from isaaclab.actuators import DelayedPDActuatorCfg
 from isaaclab.assets.articulation import ArticulationCfg
 
+from .asimov_1_ankle_actuator import ParallelAnkleActuatorCfg
+from .asimov_1_ankle_kinematics import K_PITCH, K_ROLL
+
 _REPOSITORY_ROOT = Path(__file__).resolve().parents[5]
 ASIMOV_1_MODEL_DIR = str(_REPOSITORY_ROOT / "third_party" / "asimov-1" / "sim-model")
 ASIMOV_1_URDF_PATH = str(
@@ -24,6 +27,15 @@ ASIMOV_1_ACTION_SCALE = 0.25
 # The solver's effort limit for the joints. The actuator model clips torque to actuator_effort_limit itself; Isaac Lab
 # 3.0 otherwise keeps the urdf's limit in the solver too, which is lower than the actuator's on the ankles.
 JOINT_EFFORT_LIMIT = 1.0e9
+
+# Armature of one ankle motor (EC-A4310, the same motor as the elbow), already reflected to the motor output.
+ASIMOV_1_ANKLE_MOTOR_ARMATURE = 0.0242
+# The two ankle motors' armature seen by the virtual pitch/roll joints, J^T diag(a, a) J with the firmware's linear
+# map T0 = [[k_p, -k_r], [-k_p, -k_r]]: 2 a k_p^2 = 0.1975 (pitch) and 2 a k_r^2 = 0.0310 (roll). The cross term is
+# zero for this symmetric T0. Evaluated at the zero pose; through the nonlinear linkage it grows to about
+# 0.34 / 0.046 at the standing pose (pitch -0.30), the same factor as the joint gains.
+ASIMOV_1_ANKLE_PITCH_ARMATURE = 2.0 * ASIMOV_1_ANKLE_MOTOR_ARMATURE * K_PITCH**2
+ASIMOV_1_ANKLE_ROLL_ARMATURE = 2.0 * ASIMOV_1_ANKLE_MOTOR_ARMATURE * K_ROLL**2
 
 
 ASIMOV_1_JOINT_NAMES = [
@@ -104,7 +116,7 @@ ASIMOV_1_ACTUATORS = {
         damping=10.201,
         actuator_effort_limit=72.0,
         joint_effort_limit=JOINT_EFFORT_LIMIT,
-        armature=0.42984,
+        armature=ASIMOV_1_ANKLE_PITCH_ARMATURE,
         friction=0.40,
         min_delay=DELAY_MIN_LAG,
         max_delay=DELAY_MAX_LAG,
@@ -115,7 +127,7 @@ ASIMOV_1_ACTUATORS = {
         damping=1.600,
         actuator_effort_limit=18.0,
         joint_effort_limit=JOINT_EFFORT_LIMIT,
-        armature=0.05814,
+        armature=ASIMOV_1_ANKLE_ROLL_ARMATURE,
         friction=0.40,
         min_delay=DELAY_MIN_LAG,
         max_delay=DELAY_MAX_LAG,
@@ -178,6 +190,36 @@ ASIMOV_1_ACTUATORS = {
 }
 
 
+# The ankles as the robot runs them: each motor's own PD loop on the driver (27.5 / 1.25, firmware
+# asimov_1_biped.c), simulated through the nonlinear parallel linkage (asimov_1_ankle_actuator.py). The
+# stiffness/damping here are motor gains (motor A in the pitch slot, B in the roll slot), not joint gains. At the
+# zero pose they give the joint gains of ASIMOV_1_ACTUATORS (224.42 / 10.201 pitch, 35.20 / 1.600 roll); elsewhere
+# the joint impedance follows the linkage, as on the robot.
+ASIMOV_1_ANKLE_MOTOR_KP = 27.5
+ASIMOV_1_ANKLE_MOTOR_KD = 1.25
+ASIMOV_1_ANKLE_MOTOR_TORQUE_LIMIT = 12.0
+
+ASIMOV_1_PARALLEL_ANKLE_ACTUATORS = {
+    **{name: cfg for name, cfg in ASIMOV_1_ACTUATORS.items() if name not in ("ankle_pitch", "ankle_roll")},
+    "ankle": ParallelAnkleActuatorCfg(
+        joint_names_expr=[".*_ankle_pitch_joint", ".*_ankle_roll_joint"],
+        stiffness=ASIMOV_1_ANKLE_MOTOR_KP,
+        damping=ASIMOV_1_ANKLE_MOTOR_KD,
+        motor_effort_limit=ASIMOV_1_ANKLE_MOTOR_TORQUE_LIMIT,
+        actuator_effort_limit=JOINT_EFFORT_LIMIT,
+        joint_effort_limit=JOINT_EFFORT_LIMIT,
+        armature={
+            ".*_ankle_pitch_joint": ASIMOV_1_ANKLE_PITCH_ARMATURE,
+            ".*_ankle_roll_joint": ASIMOV_1_ANKLE_ROLL_ARMATURE,
+        },
+        friction=0.40,
+        min_delay=DELAY_MIN_LAG,
+        max_delay=DELAY_MAX_LAG,
+        target_map="linear",
+    ),
+}
+
+
 ASIMOV_1_STANDING_INIT_STATE = ArticulationCfg.InitialStateCfg(
     pos=(0.0, 0.0, 0.639),
     joint_pos={
@@ -233,3 +275,7 @@ ASIMOV_1_DELAYED_CFG = ArticulationCfg(
     soft_joint_pos_limit_factor=0.9,
     actuators=ASIMOV_1_ACTUATORS,
 )
+
+
+# Same robot with the parallel-ankle actuator model (see ASIMOV_1_PARALLEL_ANKLE_ACTUATORS).
+ASIMOV_1_PARALLEL_ANKLE_CFG = ASIMOV_1_DELAYED_CFG.replace(actuators=ASIMOV_1_PARALLEL_ANKLE_ACTUATORS)

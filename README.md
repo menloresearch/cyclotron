@@ -114,6 +114,24 @@ Use this code to replicate the training run for our baseline policy using a sing
     --task Asimov1-Velocity-v0 --num_envs 4096 --headless
 ```
 
+**AMP with the parallel-ankle actuator model**
+
+The same AMP task, but the ankles are driven by motor-side PD at the robot's
+fixed motor gains, simulated through the nonlinear parallel ankle linkage
+(see `source/cyclotron/cyclotron/assets/robots/asimov_1_ankle_actuator.py`).
+
+```bash
+./cyclotron.sh --train \
+    --task Asimov1-Velocity-AMP-ParallelAnkle-v0 --num_envs 4096 --headless
+```
+
+To view it, play it with the matching Play task:
+
+```bash
+./cyclotron.sh --play \
+    --task Asimov1-Velocity-AMP-ParallelAnkle-Play-v0 --num_envs 32
+```
+
 Useful flags: `--max_iterations <n>`, `--seed <n>`, `--video` (record rollout
 clips during training), `physics=newton_mjwarp` (train with MuJoCo Warp instead
 of PhysX; see [Physics engine](docs/train.md#physics-engine)).
