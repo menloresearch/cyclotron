@@ -49,3 +49,24 @@ gym.register(
         "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:Asimov1AMPRunnerCfg",
     },
 )
+
+# AMP with the parallel-ankle actuator model (motor-side PD through the nonlinear ankle linkage).
+gym.register(
+    id="Asimov1-Velocity-AMP-ParallelAnkle-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.amp_env_cfg:Asimov1AmpParallelAnkleEnvCfg",
+        "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:Asimov1AMPRunnerCfg",
+    },
+)
+
+gym.register(
+    id="Asimov1-Velocity-AMP-ParallelAnkle-Play-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.amp_env_cfg:Asimov1AmpParallelAnkleEnvCfg_PLAY",
+        "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:Asimov1AMPRunnerCfg",
+    },
+)
