@@ -24,16 +24,9 @@ ASIMOV_1_URDF_PATH = str(
 DELAY_MIN_LAG = 0
 DELAY_MAX_LAG = 5
 ASIMOV_1_ACTION_SCALE = 0.25
-# The solver's effort limit for the joints. The actuator model clips torque to actuator_effort_limit itself; Isaac Lab
-# 3.0 otherwise keeps the urdf's limit in the solver too, which is lower than the actuator's on the ankles.
 JOINT_EFFORT_LIMIT = 1.0e9
-
-# Armature of one ankle motor (EC-A4310, the same motor as the elbow), already reflected to the motor output.
 ASIMOV_1_ANKLE_MOTOR_ARMATURE = 0.0242
-# The two ankle motors' armature seen by the virtual pitch/roll joints, J^T diag(a, a) J with the firmware's linear
-# map T0 = [[k_p, -k_r], [-k_p, -k_r]]: 2 a k_p^2 = 0.1975 (pitch) and 2 a k_r^2 = 0.0310 (roll). The cross term is
-# zero for this symmetric T0. Evaluated at the zero pose; through the nonlinear linkage it grows to about
-# 0.34 / 0.046 at the standing pose (pitch -0.30), the same factor as the joint gains.
+#map the motor armature to joint armature using the kinematics of the ankle linkage
 ASIMOV_1_ANKLE_PITCH_ARMATURE = 2.0 * ASIMOV_1_ANKLE_MOTOR_ARMATURE * K_PITCH**2
 ASIMOV_1_ANKLE_ROLL_ARMATURE = 2.0 * ASIMOV_1_ANKLE_MOTOR_ARMATURE * K_ROLL**2
 
@@ -189,12 +182,6 @@ ASIMOV_1_ACTUATORS = {
     ),
 }
 
-
-# The ankles as the robot runs them: each motor's own PD loop on the driver (27.5 / 1.25, firmware
-# asimov_1_biped.c), simulated through the nonlinear parallel linkage (asimov_1_ankle_actuator.py). The
-# stiffness/damping here are motor gains (motor A in the pitch slot, B in the roll slot), not joint gains. At the
-# zero pose they give the joint gains of ASIMOV_1_ACTUATORS (224.42 / 10.201 pitch, 35.20 / 1.600 roll); elsewhere
-# the joint impedance follows the linkage, as on the robot.
 ASIMOV_1_ANKLE_MOTOR_KP = 27.5
 ASIMOV_1_ANKLE_MOTOR_KD = 1.25
 ASIMOV_1_ANKLE_MOTOR_TORQUE_LIMIT = 12.0
@@ -215,7 +202,6 @@ ASIMOV_1_PARALLEL_ANKLE_ACTUATORS = {
         friction=0.40,
         min_delay=DELAY_MIN_LAG,
         max_delay=DELAY_MAX_LAG,
-        target_map="linear",
     ),
 }
 
@@ -276,6 +262,4 @@ ASIMOV_1_DELAYED_CFG = ArticulationCfg(
     actuators=ASIMOV_1_ACTUATORS,
 )
 
-
-# Same robot with the parallel-ankle actuator model (see ASIMOV_1_PARALLEL_ANKLE_ACTUATORS).
 ASIMOV_1_PARALLEL_ANKLE_CFG = ASIMOV_1_DELAYED_CFG.replace(actuators=ASIMOV_1_PARALLEL_ANKLE_ACTUATORS)

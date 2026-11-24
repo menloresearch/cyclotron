@@ -69,8 +69,8 @@ class Asimov1AmpEnvCfg_PLAY(Asimov1VelocityEnvCfg_PLAY):
         self.observations.amp = AmpObsCfg()
 
 
-# The same tasks with the parallel-ankle actuator model: motor-side PD at the robot's fixed motor gains, simulated
-# through the nonlinear ankle linkage (cyclotron/assets/robots/asimov_1_ankle_actuator.py).
+# The same tasks with the parallel-ankle actuator model: joint-space PD whose gains follow the nonlinear ankle linkage
+# from the robot's fixed motor gains (cyclotron/assets/robots/asimov_1_ankle_actuator.py).
 @configclass
 class Asimov1AmpParallelAnkleEnvCfg(Asimov1AmpEnvCfg):
     def __post_init__(self):

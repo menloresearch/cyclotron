@@ -10,9 +10,9 @@ Lab and not here points at a physics (contact, solver, model) difference rather 
 * actions: ``raw * scale + default`` with the configured clip, applied in the action's joint order,
 * actuators, per ``scene.robot.actuators`` group: ``DelayedPDActuator`` (PD on the delayed target, joint velocity
   target 0, torque clipped to ``actuator_effort_limit``; the delay in physics steps drawn per group at reset), and the
-  ``ParallelAnkleActuator``: each ankle motor's own PD at the motor gains, through the nonlinear linkage
-  (``q_m = g(q)``, ``dq_m = J dq``, ``tau_j = J^T clip(tau_m)``), so the joint impedance changes with the pose every
-  physics step, exactly as cyclotron/assets/robots/asimov_1_ankle_actuator.py computes it,
+  ``ParallelAnkleActuator``: a PD on the joint-space errors whose gains follow the nonlinear linkage
+  (``tau_j = J^T clip(K_m J e + D_m J de)``, i.e. joint gains ``J^T K_m J``), so the joint impedance changes with the
+  pose every physics step, exactly as cyclotron/assets/robots/asimov_1_ankle_actuator.py computes it,
 * joint armature and Coulomb friction (``frictionloss``) from the actuator config, which overrides the model's in
   Isaac Lab too.
 
@@ -163,7 +163,7 @@ class DelayedPD:
 
 
 class ParallelAnkle(DelayedPD):
-    """cyclotron's ParallelAnkleActuator: motor-side PD through the nonlinear ankle linkage."""
+    """cyclotron's ParallelAnkleActuator: joint-space PD with pose-dependent gains J^T K_m J."""
 
     def __init__(self, cfg, idx, names, rng, fixed_delay, kin):
         super().__init__(cfg, idx, names, rng, fixed_delay)
@@ -174,10 +174,8 @@ class ParallelAnkle(DelayedPD):
         self.ri = np.array([names.index(f"{s}_ankle_roll_joint") for s in SIDES])
         self.right = torch.tensor([False, True])
         self.motor_limit = float(cfg["motor_effort_limit"])
-        self.motor_pos_limit = float(cfg.get("motor_position_limit", 1.22))
         self.pitch_lim = float(cfg.get("pitch_target_limit", 0.35))
         self.roll_lim = float(cfg.get("roll_target_limit", 0.09))
-        self.target_map = cfg.get("target_map", "linear")
         self.last_joint_kp = None  # (2 legs, 2, 2) J^T K_m J of the last step, for logging
 
     def torque(self, target, q, dq):
@@ -189,17 +187,14 @@ class ParallelAnkle(DelayedPD):
         dq2 = f(np.stack((dqa[self.pi], dqa[self.ri]), axis=-1))
         pitch_t = torch.clamp(f(t[self.pi]), -self.pitch_lim, self.pitch_lim)
         roll_t = torch.clamp(f(t[self.ri]), -self.roll_lim, self.roll_lim)
-        qm, jac = kin.motor_angles_and_jacobian(pitch, roll, self.right)
-        dqm = (jac @ dq2.unsqueeze(-1)).squeeze(-1)
-        if self.target_map == "linear":
-            qm_t = kin.linear_motor_angles(pitch_t, roll_t)
-        else:
-            qm_t, _ = kin.motor_angles_and_jacobian(pitch_t, roll_t, self.right)
-        qm_t = torch.clamp(qm_t, -self.motor_pos_limit, self.motor_pos_limit)
-        dqm_t = torch.zeros_like(dqm)  # position-only action: joint velocity targets are 0
+        _, jac = kin.motor_angles_and_jacobian(pitch, roll, self.right)
+        err = torch.stack((pitch_t - pitch, roll_t - roll), dim=-1)
+        derr = -dq2  # position-only action: joint velocity targets are 0
+        err_m = (jac @ err.unsqueeze(-1)).squeeze(-1)
+        derr_m = (jac @ derr.unsqueeze(-1)).squeeze(-1)
         kp = f(np.stack((self.kp[self.pi], self.kp[self.ri]), axis=-1))
         kd = f(np.stack((self.kd[self.pi], self.kd[self.ri]), axis=-1))
-        tau_m = torch.clamp(kp * (qm_t - qm) + kd * (dqm_t - dqm), -self.motor_limit, self.motor_limit)
+        tau_m = torch.clamp(kp * err_m + kd * derr_m, -self.motor_limit, self.motor_limit)
         tau_j = (jac.transpose(-1, -2) @ tau_m.unsqueeze(-1)).squeeze(-1).numpy()
         self.last_joint_kp = (jac.transpose(-1, -2) @ torch.diag_embed(kp) @ jac).numpy()
         out = np.zeros(len(self.idx))
@@ -207,46 +202,33 @@ class ParallelAnkle(DelayedPD):
         return out
 
 
-# Asimov-1 firmware's two ankle modes (firmware/source/app/policy/policy_thread.c): the motors' own PD loops at
-# 27.5 / 1.25 (12 Nm) behind the linear target map (ANKLE_FF_TORQUE_ENABLE 0), or a joint-space PD at the zero-pose
-# equivalent gains sent as feedforward torque (ANKLE_FF_TORQUE_ENABLE 1).
-FIRMWARE_MOTOR_PD = {
+# The Asimov-1 firmware's ankle control: each motor's own PD (27.5 / 1.25, 12 Nm) behind the linear target map, i.e.
+# a joint-space PD with the pose-dependent gains J^T K_m J.
+FIRMWARE_ANKLE = {
     "class_type": "cyclotron.assets.robots.asimov_1_ankle_actuator:ParallelAnkleActuator",
     "joint_names_expr": [".*_ankle_pitch_joint", ".*_ankle_roll_joint"],
-    "stiffness": 27.5, "damping": 1.25, "motor_effort_limit": 12.0, "motor_position_limit": 1.22,
-    "pitch_target_limit": 0.35, "roll_target_limit": 0.09, "target_map": "linear",
-}
-FIRMWARE_JOINT_PD = {
-    "ankle_pitch": {"class_type": "isaaclab.actuators.actuator_pd:DelayedPDActuator",
-                    "joint_names_expr": [".*_ankle_pitch_joint"], "stiffness": 224.42, "damping": 10.201,
-                    "actuator_effort_limit": 2 * 12.0 * 2.02},
-    "ankle_roll": {"class_type": "isaaclab.actuators.actuator_pd:DelayedPDActuator",
-                   "joint_names_expr": [".*_ankle_roll_joint"], "stiffness": 35.2, "damping": 1.6,
-                   "actuator_effort_limit": 2 * 12.0 * 0.8},
+    "stiffness": 27.5, "damping": 1.25, "motor_effort_limit": 12.0,
+    "pitch_target_limit": 0.35, "roll_target_limit": 0.09,
 }
 
 
 def override_ankles(groups: dict, mode: str) -> dict:
-    """The run's actuator groups, with the ankles replaced by one firmware mode unless ``mode`` is 'trained'."""
+    """The run's actuator groups, with the ankles replaced by the firmware's ankle control when ``mode`` is 'firmware'."""
     if mode == "trained":
         return groups
     is_ankle = lambda c: any("ankle" in e for e in c["joint_names_expr"])  # noqa: E731
     ankle = [c for c in groups.values() if is_ankle(c)]
     keep = {k: c for k, c in groups.items() if not is_ankle(c)}
     shared = {k: ankle[0].get(k) for k in ("min_delay", "max_delay", "friction")}
-    # armature: the run's per-joint value, which the firmware mode doesn't change
+    # armature: the run's per-joint value, which the firmware doesn't change
     joints = [f"{s}_ankle_{j}_joint" for s in SIDES for j in ("pitch", "roll")]
     arm = {}
     for c in ankle:
         names = match_joints(c["joint_names_expr"], joints)
         vals = per_joint(c.get("armature"), names, "armature")
         arm.update({re.escape(n): float(v) for n, v in zip(names, vals)})
-    if mode == "motor_pd":
-        keep["ankle"] = {**FIRMWARE_MOTOR_PD, **shared, "armature": arm}
-    else:
-        for k, c in FIRMWARE_JOINT_PD.items():
-            keep[k] = {**c, **shared, "armature": arm}
-    print(f"[INFO] ankles: firmware mode '{mode}' instead of the run's actuator config")
+    keep["ankle"] = {**FIRMWARE_ANKLE, **shared, "armature": arm}
+    print("[INFO] ankles: the firmware's ankle control instead of the run's actuator config")
     return keep
 
 
@@ -389,8 +371,8 @@ class Sim2Sim:
             )
             if isinstance(a, ParallelAnkle):
                 print(
-                    f"       motor PD (kp {a.kp[0]}, kd {a.kd[0]}, {a.motor_limit} Nm) through the linkage,"
-                    f" target map '{a.target_map}', target clamp pitch ±{a.pitch_lim} roll ±{a.roll_lim}"
+                    f"       joint PD with gains J^T K_m J (motor kp {a.kp[0]}, kd {a.kd[0]}, {a.motor_limit} Nm),"
+                    f" target clamp pitch ±{a.pitch_lim} roll ±{a.roll_lim}"
                 )
         lags = {t["name"]: t["lag"] for t in self.obs_terms if "lag" in t}
         print(f"[INFO] observation lags (policy steps): {lags}")
@@ -597,11 +579,10 @@ def main():
     p.add_argument("--obs_lag", type=int, default=None, help="observation lag in policy steps (default: random within the trained range)")
     p.add_argument(
         "--ankle",
-        choices=("trained", "motor_pd", "joint_pd"),
+        choices=("trained", "firmware"),
         default="trained",
-        help="ankle actuation: as the run was trained (default), or one of the firmware's modes: motor_pd (motor-side"
-        " PD 27.5/1.25 through the linkage, ANKLE_FF_TORQUE_ENABLE 0) or joint_pd (joint-space PD 224.42/10.201,"
-        " 35.2/1.6 as feedforward torque, ANKLE_FF_TORQUE_ENABLE 1)",
+        help="ankle actuation: as the run was trained (default), or 'firmware': the robot's motor-side PD 27.5/1.25"
+        " (joint-space PD with gains J^T K_m J), e.g. to test a constant-gain run against the real ankle behaviour",
     )
     p.add_argument("--no_joint_friction", action="store_true", help="don't apply the actuator config's Coulomb joint friction")
     p.add_argument("--seed", type=int, default=0)

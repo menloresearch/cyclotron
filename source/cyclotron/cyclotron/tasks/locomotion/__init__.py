@@ -50,7 +50,7 @@ gym.register(
     },
 )
 
-# AMP with the parallel-ankle actuator model (motor-side PD through the nonlinear ankle linkage).
+# AMP with the parallel-ankle actuator model (joint-space PD with gains from the nonlinear ankle linkage).
 gym.register(
     id="Asimov1-Velocity-AMP-ParallelAnkle-v0",
     entry_point="isaaclab.envs:ManagerBasedRLEnv",

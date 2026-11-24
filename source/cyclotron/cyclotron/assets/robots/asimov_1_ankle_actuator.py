@@ -1,41 +1,39 @@
-"""Actuator model of Asimov-1's parallel ankles: the motor-side PD loops, simulated through the nonlinear linkage.
+"""Actuator model of Asimov-1's parallel ankles: a joint-space PD whose gains follow the nonlinear linkage.
 
-On the robot each ankle's two motors (A, B) run their own PD loops on the drivers at fixed gains, and the firmware
-maps the policy's virtual (pitch, roll) targets to motor targets. The resulting joint impedance,
-``K_j(q) = J(q)^T K_m J(q)``, depends on the pose: at the robot's standing pose it is about 1.7x (pitch) and 1.5x
-(roll) the value of the linear map at zero, which a constant joint-space PD gain does not reproduce.
+The targets and the joint state stay in joint space, as with :class:`DelayedPDActuator`: the PD acts on the joint
+errors ``e = q* - q`` and ``de = dq* - dq``. What the linkage changes is the gains. Each ankle's two motors (A, B) have
+fixed PD gains ``K_m``, ``D_m``, so the joint impedance is ``K_j(q) = J(q)^T K_m J(q)`` and ``D_j(q) = J(q)^T D_m J(q)``,
+which depends on the pose: at the robot's standing pose it is about 1.7x (pitch) and 1.5x (roll) its value at zero,
+which a constant joint-space PD gain does not reproduce.
 
-This actuator reproduces the robot instead of assuming constant joint gains. Per physics step and ankle:
+Per physics step and ankle:
 
-* the (delayed) virtual targets are clamped like the firmware and mapped to motor targets, through the firmware's
-  linear map ``T0`` (``target_map="linear"``) or the full linkage (``target_map="nonlinear"``),
-* the motor angles and velocities come from the joint state through the linkage, ``q_m = g(q)``, ``dq_m = J dq``,
-* each motor's PD torque ``tau_m = k_p (q_m* - q_m) + k_d (dq_m* - dq_m)`` is clipped to the motor's torque limit,
-* the joint torques are ``tau_j = J^T tau_m``.
+* the (delayed) joint targets are clamped like the firmware clamps them,
+* the joint errors are mapped to motor space through the Jacobian at the current pose, ``J(q) e`` and ``J(q) de``,
+* each motor's PD torque ``tau_m = k_p J e + k_d J de`` is clipped to the motor's torque limit,
+* the joint torques are ``tau_j = J^T tau_m`` (``= K_j(q) e + D_j(q) de`` while no motor saturates).
 
-The stiffness and damping configured for the ankle joints are the gains of the motor in that slot, as the firmware
-assigns them: motor A sits in the pitch slot and motor B in the roll slot. Gain randomization therefore perturbs
-each motor's gains, and unequal motor gains give the pitch-roll coupling they give on the robot.
+The stiffness and damping configured for the ankle joints are the gains of the motor in that slot: motor A sits in the
+pitch slot and motor B in the roll slot. Gain randomization therefore perturbs each motor's gains, and unequal motor
+gains give the pitch-roll coupling they give on the robot.
 """
 
 from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import MISSING
-from typing import Literal
-
 import torch
 from isaaclab.actuators import DelayedPDActuator, DelayedPDActuatorCfg
 from isaaclab.utils import configclass
 from isaaclab.utils.types import ArticulationActions
 
-from .asimov_1_ankle_kinematics import linear_motor_angles, motor_angles_and_jacobian
+from .asimov_1_ankle_kinematics import motor_angles_and_jacobian
 
 _SIDES = ("left", "right")
 
 
 class ParallelAnkleActuator(DelayedPDActuator):
-    """Delayed motor-side PD for the two parallel ankles, mapped through the linkage (see the module docstring)."""
+    """Delayed joint-space PD for the two parallel ankles, with pose-dependent gains (see the module docstring)."""
 
     cfg: ParallelAnkleActuatorCfg
 
@@ -70,23 +68,19 @@ class ParallelAnkleActuator(DelayedPDActuator):
         pitch_t = torch.clamp(target_pos[:, pi], -self.cfg.pitch_target_limit, self.cfg.pitch_target_limit)
         roll_t = torch.clamp(target_pos[:, ri], -self.cfg.roll_target_limit, self.cfg.roll_target_limit)
 
-        # Motor state from the joint state, through the linkage.
-        qm, jac = motor_angles_and_jacobian(pitch, roll, self._right)  # (N, 2, 2), (N, 2, 2, 2)
-        dq = torch.stack((pitch_vel, roll_vel), dim=-1)
-        dqm = (jac @ dq.unsqueeze(-1)).squeeze(-1)
-        # Motor targets, as the firmware computes them, clamped to the motors' range.
-        if self.cfg.target_map == "linear":
-            qm_t = linear_motor_angles(pitch_t, roll_t)
-        else:
-            qm_t, _ = motor_angles_and_jacobian(pitch_t, roll_t, self._right)
-        qm_t = torch.clamp(qm_t, -self.cfg.motor_position_limit, self.cfg.motor_position_limit)
-        dq_t = torch.stack((target_vel[:, pi], target_vel[:, ri]), dim=-1)
-        dqm_t = (jac @ dq_t.unsqueeze(-1)).squeeze(-1)
+        # Joint-space errors, as in DelayedPDActuator.
+        err = torch.stack((pitch_t - pitch, roll_t - roll), dim=-1)  # (N, 2 legs, 2)
+        derr = torch.stack((target_vel[:, pi] - pitch_vel, target_vel[:, ri] - roll_vel), dim=-1)
 
-        # Each motor's own PD loop, with its (possibly randomized) gains: motor A in the pitch slot, B in the roll slot.
+        # Mapped to the motors through the Jacobian at the current pose, so the gains become J^T K_m J.
+        _, jac = motor_angles_and_jacobian(pitch, roll, self._right)  # (N, 2, 2, 2)
+        err_m = (jac @ err.unsqueeze(-1)).squeeze(-1)
+        derr_m = (jac @ derr.unsqueeze(-1)).squeeze(-1)
+
+        # Each motor's gains (possibly randomized): motor A in the pitch slot, B in the roll slot.
         kp = torch.stack((self.stiffness[:, pi], self.stiffness[:, ri]), dim=-1)
         kd = torch.stack((self.damping[:, pi], self.damping[:, ri]), dim=-1)
-        tau_m = kp * (qm_t - qm) + kd * (dqm_t - dqm)
+        tau_m = kp * err_m + kd * derr_m
         tau_m_applied = torch.clamp(tau_m, -self.cfg.motor_effort_limit, self.cfg.motor_effort_limit)
 
         # Back to the virtual joints: tau_j = J^T tau_m.
@@ -112,8 +106,9 @@ class ParallelAnkleActuator(DelayedPDActuator):
 class ParallelAnkleActuatorCfg(DelayedPDActuatorCfg):
     """Configuration of :class:`ParallelAnkleActuator`.
 
-    ``stiffness`` and ``damping`` are the motors' PD gains (motor A in the pitch slot, B in the roll slot). The
-    joint-space effort limits of the base configuration are not used for clipping; the motor torque limit is.
+    ``stiffness`` and ``damping`` are the motors' PD gains (motor A in the pitch slot, B in the roll slot); the joint
+    gains are ``J(q)^T K_m J(q)``. The joint-space effort limits of the base configuration are not used for clipping;
+    the motor torque limit is.
     """
 
     class_type: type = ParallelAnkleActuator
@@ -121,14 +116,8 @@ class ParallelAnkleActuatorCfg(DelayedPDActuatorCfg):
     motor_effort_limit: float = MISSING
     """Torque limit of each ankle motor (N m), as the firmware clamps it."""
 
-    motor_position_limit: float = 1.22
-    """Range of each ankle motor's target (rad), as the firmware clamps it."""
-
     pitch_target_limit: float = 0.35
-    """Virtual pitch target clamp (rad), as the firmware applies it before the motor map."""
+    """Joint pitch target clamp (rad), as the firmware applies it."""
 
     roll_target_limit: float = 0.09
-    """Virtual roll target clamp (rad), as the firmware applies it before the motor map."""
-
-    target_map: Literal["linear", "nonlinear"] = "linear"
-    """How the firmware maps virtual targets to motor targets: its linear map T0, or the full linkage kinematics."""
+    """Joint roll target clamp (rad), as the firmware applies it."""

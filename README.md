@@ -116,8 +116,9 @@ Use this code to replicate the training run for our baseline policy using a sing
 
 **AMP with the parallel-ankle actuator model**
 
-The same AMP task, but the ankles are driven by motor-side PD at the robot's
-fixed motor gains, simulated through the nonlinear parallel ankle linkage
+The same AMP task, but the ankle PD gains follow the nonlinear parallel ankle
+linkage (joint gains `J(q)^T K_m J(q)` from the robot's fixed motor gains)
+instead of being constant; targets and errors stay in joint space
 (see `source/cyclotron/cyclotron/assets/robots/asimov_1_ankle_actuator.py`).
 
 ```bash
