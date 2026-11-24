@@ -89,17 +89,3 @@ def test_linear_map_is_t0():
     assert torch.allclose(qm[:, 0], K.K_PITCH * p - K.K_ROLL * r)
     assert torch.allclose(qm[:, 1], -K.K_PITCH * p - K.K_ROLL * r)
 
-
-def test_motor_pd_on_joint_errors_equals_pose_dependent_joint_gains():
-    # The actuator's torque, J^T (K_m J e + D_m J de), is a joint-space PD with gains J^T K_m J and J^T D_m J.
-    p, r = _grid()
-    _, jac = K.left_motor_angles_and_jacobian(p, r)
-    km = torch.tensor([27.5, 30.0], dtype=F64)
-    dm = torch.tensor([1.25, 1.1], dtype=F64)
-    e = torch.stack((0.05 - p, 0.01 - r), dim=-1).unsqueeze(-1)
-    de = torch.full_like(e, -0.3)
-    jt = jac.transpose(-1, -2)
-    tau = jt @ (km.unsqueeze(-1) * (jac @ e) + dm.unsqueeze(-1) * (jac @ de))
-    kj = jt @ torch.diag(km) @ jac
-    dj = jt @ torch.diag(dm) @ jac
-    assert torch.allclose(tau, kj @ e + dj @ de)

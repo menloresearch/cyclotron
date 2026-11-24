@@ -173,7 +173,6 @@ class ParallelAnkle(DelayedPD):
         self.pi = np.array([names.index(f"{s}_ankle_pitch_joint") for s in SIDES])
         self.ri = np.array([names.index(f"{s}_ankle_roll_joint") for s in SIDES])
         self.right = torch.tensor([False, True])
-        self.motor_limit = float(cfg["motor_effort_limit"])
         self.pitch_lim = float(cfg.get("pitch_target_limit", 0.35))
         self.roll_lim = float(cfg.get("roll_target_limit", 0.09))
         self.last_joint_kp = None  # (2 legs, 2, 2) J^T K_m J of the last step, for logging
@@ -190,24 +189,25 @@ class ParallelAnkle(DelayedPD):
         _, jac = kin.motor_angles_and_jacobian(pitch, roll, self.right)
         err = torch.stack((pitch_t - pitch, roll_t - roll), dim=-1)
         derr = -dq2  # position-only action: joint velocity targets are 0
-        err_m = (jac @ err.unsqueeze(-1)).squeeze(-1)
-        derr_m = (jac @ derr.unsqueeze(-1)).squeeze(-1)
-        kp = f(np.stack((self.kp[self.pi], self.kp[self.ri]), axis=-1))
-        kd = f(np.stack((self.kd[self.pi], self.kd[self.ri]), axis=-1))
-        tau_m = torch.clamp(kp * err_m + kd * derr_m, -self.motor_limit, self.motor_limit)
-        tau_j = (jac.transpose(-1, -2) @ tau_m.unsqueeze(-1)).squeeze(-1).numpy()
-        self.last_joint_kp = (jac.transpose(-1, -2) @ torch.diag_embed(kp) @ jac).numpy()
+        km = f(np.stack((self.kp[self.pi], self.kp[self.ri]), axis=-1))
+        dm = f(np.stack((self.kd[self.pi], self.kd[self.ri]), axis=-1))
+        jt = jac.transpose(-1, -2)
+        kj = jt @ (km.unsqueeze(-1) * jac)  # J^T K_m J
+        dj = jt @ (dm.unsqueeze(-1) * jac)  # J^T D_m J
+        tau_j = (kj @ err.unsqueeze(-1) + dj @ derr.unsqueeze(-1)).squeeze(-1).numpy()
+        self.last_joint_kp = kj.numpy()
         out = np.zeros(len(self.idx))
         out[self.pi], out[self.ri] = tau_j[:, 0], tau_j[:, 1]
-        return out
+        return np.clip(out, -self.limit, self.limit)
 
 
-# The Asimov-1 firmware's ankle control: each motor's own PD (27.5 / 1.25, 12 Nm) behind the linear target map, i.e.
-# a joint-space PD with the pose-dependent gains J^T K_m J.
+# The Asimov-1 ankles as the firmware drives them: each motor's own PD (27.5 / 1.25), i.e. a joint-space PD with the
+# pose-dependent gains J^T K_m J, clipped per joint like the training config.
 FIRMWARE_ANKLE = {
     "class_type": "cyclotron.assets.robots.asimov_1_ankle_actuator:ParallelAnkleActuator",
     "joint_names_expr": [".*_ankle_pitch_joint", ".*_ankle_roll_joint"],
-    "stiffness": 27.5, "damping": 1.25, "motor_effort_limit": 12.0,
+    "stiffness": 27.5, "damping": 1.25,
+    "actuator_effort_limit": {".*_ankle_pitch_joint": 72.0, ".*_ankle_roll_joint": 28.0},
     "pitch_target_limit": 0.35, "roll_target_limit": 0.09,
 }
 
@@ -371,7 +371,7 @@ class Sim2Sim:
             )
             if isinstance(a, ParallelAnkle):
                 print(
-                    f"       joint PD with gains J^T K_m J (motor kp {a.kp[0]}, kd {a.kd[0]}, {a.motor_limit} Nm),"
+                    f"       joint PD with gains J^T K_m J (motor kp {a.kp[0]}, kd {a.kd[0]}), limits {np.unique(a.limit)} Nm,"
                     f" target clamp pitch ±{a.pitch_lim} roll ±{a.roll_lim}"
                 )
         lags = {t["name"]: t["lag"] for t in self.obs_terms if "lag" in t}

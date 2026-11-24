@@ -184,7 +184,6 @@ ASIMOV_1_ACTUATORS = {
 
 ASIMOV_1_ANKLE_MOTOR_KP = 27.5
 ASIMOV_1_ANKLE_MOTOR_KD = 1.25
-ASIMOV_1_ANKLE_MOTOR_TORQUE_LIMIT = 12.0
 
 ASIMOV_1_PARALLEL_ANKLE_ACTUATORS = {
     **{name: cfg for name, cfg in ASIMOV_1_ACTUATORS.items() if name not in ("ankle_pitch", "ankle_roll")},
@@ -192,14 +191,17 @@ ASIMOV_1_PARALLEL_ANKLE_ACTUATORS = {
         joint_names_expr=[".*_ankle_pitch_joint", ".*_ankle_roll_joint"],
         stiffness=ASIMOV_1_ANKLE_MOTOR_KP,
         damping=ASIMOV_1_ANKLE_MOTOR_KD,
-        motor_effort_limit=ASIMOV_1_ANKLE_MOTOR_TORQUE_LIMIT,
-        actuator_effort_limit=JOINT_EFFORT_LIMIT,
+        actuator_effort_limit={".*_ankle_pitch_joint": 72.0, ".*_ankle_roll_joint": 28.0},
         joint_effort_limit=JOINT_EFFORT_LIMIT,
         armature={
             ".*_ankle_pitch_joint": ASIMOV_1_ANKLE_PITCH_ARMATURE,
             ".*_ankle_roll_joint": ASIMOV_1_ANKLE_ROLL_ARMATURE,
         },
-        friction=0.40,
+        friction={".*_ankle_pitch_joint": 1.6, ".*_ankle_roll_joint": 0.64},
+        # Joint speed limits (rad/s): the solver enforces joint_velocity_limit; actuator_velocity_limit is the
+        # actuator's rated speed in the articulation data and does not clip anything for this PD model.
+        joint_velocity_limit={".*_ankle_pitch_joint": 4.61, ".*_ankle_roll_joint": 11.65},
+        actuator_velocity_limit={".*_ankle_pitch_joint": 4.61, ".*_ankle_roll_joint": 11.65},
         min_delay=DELAY_MIN_LAG,
         max_delay=DELAY_MAX_LAG,
     ),
