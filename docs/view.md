@@ -145,14 +145,19 @@ local-only: use the cyclotron benchmark command for submittable run provenance.
 
 The viewer builds the policy's input term by term from `observations.policy`
 in `env.yaml`. Recurrent policies (an rsl_rl LSTM or GRU) and stacked-history
-policies run as long as every term is computable. The output is fixed by the
-robot: 23 joint position targets at 50 Hz. A policy the viewer would run
+policies run as long as every term is computable. The robot has 23 joint
+position targets at 50 Hz. A policy drives the joints named in
+`actions.joint_pos.joint_names`: all 23, or some of them, such as a leg-only
+policy's 12 leg joints. The viewer holds every other joint at its `env.yaml`
+default pose with that joint's own gains and torque limit. A policy the viewer would run
 wrongly is refused, naming the difference, and `--view` warns about it before
 the server starts:
 
 - an observation term the viewer can't compute, such as base linear velocity,
   foot contacts or a height scan, or a term with `clip` or `modifiers` set, or
   delayed (Isaac Lab 3.0's `delay_max_lag` above 0)
+- angular velocity or gravity read at another body than the pelvis, such as a
+  torso IMU
 - a policy trained at another rate than 50 Hz (`sim.dt` x `decimation` in
   `env.yaml`)
 - actions sent to the joints in another order, without `preserve_order` or
