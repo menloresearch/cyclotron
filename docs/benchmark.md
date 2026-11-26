@@ -69,7 +69,7 @@ format or protocol fails there.
 
 ### Scoring protocol 2
 
-The pinned HPV (`5c4e24e`) implements scoring protocol 2, and runs a benchmark
+The pinned HPV (`2f203df`) implements scoring protocol 2, and runs a benchmark
 only when its `harness.protocol` is 2 (`--force` runs others, locally only).
 Protocol 2 adds metrics that judge a run by how it ends, so a robot that falls
 and gets back up survives:
