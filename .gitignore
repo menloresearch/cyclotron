@@ -37,3 +37,4 @@ wandb/
 !.vscode/.gitignore
 !.vscode/extensions.json
 !.vscode/tasks.json
+third_party/

@@ -11,6 +11,9 @@ import isaaclab.sim as sim_utils
 from isaaclab.actuators import DelayedPDActuatorCfg
 from isaaclab.assets.articulation import ArticulationCfg
 
+from .asimov_1_ankle_actuator import ParallelAnkleActuatorCfg
+from .asimov_1_ankle_kinematics import K_PITCH, K_ROLL
+
 _REPOSITORY_ROOT = Path(__file__).resolve().parents[5]
 ASIMOV_1_MODEL_DIR = str(_REPOSITORY_ROOT / "third_party" / "asimov-1" / "sim-model")
 ASIMOV_1_URDF_PATH = str(
@@ -21,9 +24,11 @@ ASIMOV_1_URDF_PATH = str(
 DELAY_MIN_LAG = 0
 DELAY_MAX_LAG = 5
 ASIMOV_1_ACTION_SCALE = 0.25
-# The solver's effort limit for the joints. The actuator model clips torque to actuator_effort_limit itself; Isaac Lab
-# 3.0 otherwise keeps the urdf's limit in the solver too, which is lower than the actuator's on the ankles.
 JOINT_EFFORT_LIMIT = 1.0e9
+ASIMOV_1_ANKLE_MOTOR_ARMATURE = 0.0242
+#map the motor armature to joint armature using the kinematics of the ankle linkage
+ASIMOV_1_ANKLE_PITCH_ARMATURE = 2.0 * ASIMOV_1_ANKLE_MOTOR_ARMATURE * K_PITCH**2
+ASIMOV_1_ANKLE_ROLL_ARMATURE = 2.0 * ASIMOV_1_ANKLE_MOTOR_ARMATURE * K_ROLL**2
 
 
 ASIMOV_1_JOINT_NAMES = [
@@ -104,7 +109,7 @@ ASIMOV_1_ACTUATORS = {
         damping=10.201,
         actuator_effort_limit=72.0,
         joint_effort_limit=JOINT_EFFORT_LIMIT,
-        armature=0.42984,
+        armature=ASIMOV_1_ANKLE_PITCH_ARMATURE,
         friction=0.40,
         min_delay=DELAY_MIN_LAG,
         max_delay=DELAY_MAX_LAG,
@@ -115,7 +120,7 @@ ASIMOV_1_ACTUATORS = {
         damping=1.600,
         actuator_effort_limit=18.0,
         joint_effort_limit=JOINT_EFFORT_LIMIT,
-        armature=0.05814,
+        armature=ASIMOV_1_ANKLE_ROLL_ARMATURE,
         friction=0.40,
         min_delay=DELAY_MIN_LAG,
         max_delay=DELAY_MAX_LAG,
@@ -177,6 +182,31 @@ ASIMOV_1_ACTUATORS = {
     ),
 }
 
+ASIMOV_1_ANKLE_MOTOR_KP = 27.5
+ASIMOV_1_ANKLE_MOTOR_KD = 1.25
+
+ASIMOV_1_PARALLEL_ANKLE_ACTUATORS = {
+    **{name: cfg for name, cfg in ASIMOV_1_ACTUATORS.items() if name not in ("ankle_pitch", "ankle_roll")},
+    "ankle": ParallelAnkleActuatorCfg(
+        joint_names_expr=[".*_ankle_pitch_joint", ".*_ankle_roll_joint"],
+        stiffness=ASIMOV_1_ANKLE_MOTOR_KP,
+        damping=ASIMOV_1_ANKLE_MOTOR_KD,
+        actuator_effort_limit={".*_ankle_pitch_joint": 72.0, ".*_ankle_roll_joint": 28.0},
+        joint_effort_limit=JOINT_EFFORT_LIMIT,
+        armature={
+            ".*_ankle_pitch_joint": ASIMOV_1_ANKLE_PITCH_ARMATURE,
+            ".*_ankle_roll_joint": ASIMOV_1_ANKLE_ROLL_ARMATURE,
+        },
+        friction={".*_ankle_pitch_joint": 1.6, ".*_ankle_roll_joint": 0.64},
+        # Joint speed limits (rad/s): the solver enforces joint_velocity_limit; actuator_velocity_limit is the
+        # actuator's rated speed in the articulation data and does not clip anything for this PD model.
+        joint_velocity_limit={".*_ankle_pitch_joint": 4.61, ".*_ankle_roll_joint": 11.65},
+        actuator_velocity_limit={".*_ankle_pitch_joint": 4.61, ".*_ankle_roll_joint": 11.65},
+        min_delay=DELAY_MIN_LAG,
+        max_delay=DELAY_MAX_LAG,
+    ),
+}
+
 
 ASIMOV_1_STANDING_INIT_STATE = ArticulationCfg.InitialStateCfg(
     pos=(0.0, 0.0, 0.639),
@@ -233,3 +263,5 @@ ASIMOV_1_DELAYED_CFG = ArticulationCfg(
     soft_joint_pos_limit_factor=0.9,
     actuators=ASIMOV_1_ACTUATORS,
 )
+
+ASIMOV_1_PARALLEL_ANKLE_CFG = ASIMOV_1_DELAYED_CFG.replace(actuators=ASIMOV_1_PARALLEL_ANKLE_ACTUATORS)

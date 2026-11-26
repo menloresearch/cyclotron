@@ -11,7 +11,7 @@ from isaaclab.managers import ObservationTermCfg as ObsTerm
 from isaaclab.managers import SceneEntityCfg
 from isaaclab.utils import configclass
 
-from cyclotron.assets.robots.asimov_1 import ASIMOV_1_JOINT_NAMES
+from cyclotron.assets.robots.asimov_1 import ASIMOV_1_JOINT_NAMES, ASIMOV_1_PARALLEL_ANKLE_CFG
 
 from . import mdp
 from .velocity_env_cfg import Asimov1VelocityEnvCfg, Asimov1VelocityEnvCfg_PLAY
@@ -67,3 +67,19 @@ class Asimov1AmpEnvCfg_PLAY(Asimov1VelocityEnvCfg_PLAY):
     def __post_init__(self):
         super().__post_init__()
         self.observations.amp = AmpObsCfg()
+
+
+# The same tasks with the parallel-ankle actuator model: joint-space PD whose gains follow the nonlinear ankle linkage
+# from the robot's fixed motor gains (cyclotron/assets/robots/asimov_1_ankle_actuator.py).
+@configclass
+class Asimov1AmpParallelAnkleEnvCfg(Asimov1AmpEnvCfg):
+    def __post_init__(self):
+        super().__post_init__()
+        self.scene.robot = self.scene.robot.replace(actuators=ASIMOV_1_PARALLEL_ANKLE_CFG.actuators)
+
+
+@configclass
+class Asimov1AmpParallelAnkleEnvCfg_PLAY(Asimov1AmpEnvCfg_PLAY):
+    def __post_init__(self):
+        super().__post_init__()
+        self.scene.robot = self.scene.robot.replace(actuators=ASIMOV_1_PARALLEL_ANKLE_CFG.actuators)
